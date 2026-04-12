@@ -1,0 +1,1294 @@
+import {
+  WORKER_BASE_URL,
+  STORAGE_KEYS,
+  LIPU_FACE_REFERENCE_URL,
+  LIPU_IMAGE_REPLY_ENABLED,
+  LIPU_IMAGE_REPLY_CHANCE,
+  LIPU_IMAGE_REPLY_MIN_TURNS,
+  LIPU_IMAGE_REPLY_MIN_INTERVAL_MS
+} from './config.js';
+import {
+  state,
+  getActiveUserProfile,
+  saveSessionSummary,
+  getSessionSummary,
+  savePinnedSummary,
+  getPinnedSummary,
+  saveIntermediateSummary,
+  getIntermediateSummary
+} from './state.js';
+import { normalizeString, safeParseJSON, blobToBase64 } from './utils.js';
+import { buildEnvironmentalContext } from './context.js';
+import { applyRelationshipTheme } from './theme.js';
+
+export async function loadLongTermMemory() {
+  try {
+    const response = await fetch('./lipu-memory.json');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    state.longTermMemory = await response.json();
+  } catch {
+    state.longTermMemory = null;
+  }
+}
+
+export function getRelationshipState() {
+  return JSON.parse(
+    localStorage.getItem('lipu_relationship_state') ||
+      JSON.stringify({
+        familiarity: 0,
+        trust: 0,
+        provocation: 0,
+        intimacy: 0,
+        tension: 0,
+        dependence: 0
+      })
+  );
+}
+
+function saveRelationshipState(value) {
+  localStorage.setItem('lipu_relationship_state', JSON.stringify(value));
+}
+
+function getReadableError(err) {
+  if (!err) return 'Errore sconosciuto';
+  if (typeof err === 'string') return err;
+  if (err instanceof Error) return err.message || err.name || 'Errore generico';
+
+  if (typeof err === 'object') {
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return 'Oggetto errore non serializzabile';
+    }
+  }
+
+  return String(err);
+}
+
+function clampText(text = '', max = 300) {
+  return String(text || '').trim().slice(0, max);
+}
+
+function normalizeKeywordList(text = '') {
+  return normalizeString(text)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter(item => item.length > 2);
+}
+
+function buildCompactTranscript(messages = [], maxMessages = 12, maxCharsPerLine = 140) {
+  return messages
+    .filter(msg => msg.type === 'text' && msg.content)
+    .slice(-maxMessages)
+    .map(msg => {
+      const role = msg.role === 'user' ? 'Utente' : 'LIPU';
+      return `${role}: ${clampText(msg.content, maxCharsPerLine)}`;
+    })
+    .join('\n')
+    .slice(0, 1800);
+}
+
+async function postJSON(url, body) {
+  let response;
+
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (err) {
+    console.error('Fetch fallita verso:', url, getReadableError(err));
+    throw new Error(`Impossibile contattare il server: ${url}`);
+  }
+
+  let data = null;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+
+  return data;
+}
+
+function applyDecay(stateValue, decay = 0.92) {
+  return {
+    familiarity: stateValue.familiarity * decay,
+    trust: stateValue.trust * decay,
+    provocation: stateValue.provocation * decay,
+    intimacy: stateValue.intimacy * decay,
+    tension: stateValue.tension * decay,
+    dependence: stateValue.dependence * decay
+  };
+}
+
+function boostRelevantDimensions(stateValue, aiState, factor = 0.35, threshold = 2.5) {
+  const next = { ...stateValue };
+
+  for (const key of Object.keys(next)) {
+    const value = Number(aiState?.[key] || 0);
+    if (value >= threshold) {
+      next[key] += value * factor;
+    }
+  }
+
+  return next;
+}
+
+function rebalanceRelationshipState(stateValue) {
+  const next = { ...stateValue };
+
+  if (next.provocation > 5) {
+    next.intimacy *= 0.88;
+    next.trust *= 0.93;
+  }
+
+  if (next.intimacy > 5) {
+    next.provocation *= 0.9;
+    next.tension *= 0.94;
+  }
+
+  if (next.trust > 6) {
+    next.tension *= 0.9;
+  }
+
+  if (next.dependence > 5) {
+    next.trust *= 1.05;
+  }
+
+  return next;
+}
+
+function normalizeRelationshipState(stateValue) {
+  const next = {};
+
+  for (const key of Object.keys(stateValue)) {
+    next[key] = Math.max(0, Math.min(10, Number(stateValue[key].toFixed(2))));
+  }
+
+  return next;
+}
+
+async function analyzeUserRelationalState(userMsg) {
+  try {
+    const systemText = `
+Analizza il messaggio dell’utente e restituisci SOLO un JSON valido con valori 0-10 per:
+- familiarity
+- trust
+- provocation
+- intimacy
+- tension
+- dependence
+
+Solo JSON.
+Messaggio:
+"${normalizeString(userMsg)}"
+`.trim();
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
+      userMsg: normalizeString(userMsg),
+      systemText
+    });
+
+    const parsed = safeParseJSON(data?.text || '');
+    if (!parsed) return null;
+
+    return {
+      familiarity: Number(parsed.familiarity) || 0,
+      trust: Number(parsed.trust) || 0,
+      provocation: Number(parsed.provocation) || 0,
+      intimacy: Number(parsed.intimacy) || 0,
+      tension: Number(parsed.tension) || 0,
+      dependence: Number(parsed.dependence) || 0
+    };
+  } catch (err) {
+    console.error('Errore analyzeUserRelationalState:', getReadableError(err));
+    return null;
+  }
+}
+
+function getTopRelationshipDimensions(stateValue, topN = 2) {
+  return Object.entries(stateValue)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN);
+}
+
+function getRelationshipInstructions(stateValue) {
+  const top = getTopRelationshipDimensions(stateValue, 2);
+  const rules = [];
+
+  for (const [key, value] of top) {
+    if (key === 'familiarity' && value >= 8) {
+      rules.push('Con l’utente c’è familiarità: puoi essere più diretto e naturale.');
+    }
+    if (key === 'trust' && value >= 8) {
+      rules.push('L’utente si sta aprendo: rispondi con maggiore precisione emotiva.');
+    }
+    if (key === 'provocation' && value >= 8) {
+      rules.push('L’utente tende a provocarti: non essere accomodante.');
+    }
+    if (key === 'intimacy' && value >= 8) {
+      rules.push('C’è una sfumatura più intima o ambigua: puoi essere più magnetico.');
+    }
+    if (key === 'dependence' && value >= 8) {
+      rules.push('L’utente tende a delegarti decisioni: puoi assumere più guida.');
+    }
+    if (key === 'tension' && value >= 8) {
+      rules.push('La conversazione ha tensione percepibile: mantieni controllo e intensità.');
+    }
+  }
+
+  return rules.join('\n');
+}
+
+function getRecentLIPUResponses(limit = 2) {
+  return state.workingMemory
+    .filter(msg => msg.role === 'lipu' && msg.type === 'text' && msg.content)
+    .slice(-limit)
+    .map(msg => String(msg.content).trim())
+    .filter(Boolean);
+}
+
+function getFirstConversationMessagesForPinnedSummary(limit = 10) {
+  return state.conversationHistory
+    .filter(msg => msg.type === 'text' && msg.content)
+    .slice(0, limit);
+}
+
+function getMessagesAfterTimestamp(timestamp = 0, limit = 12) {
+  return state.conversationHistory
+    .filter(msg => {
+      return (
+        msg.type === 'text' &&
+        msg.content &&
+        Number(msg.timestamp || 0) > Number(timestamp || 0)
+      );
+    })
+    .slice(-limit);
+}
+
+function getMessagesAfterIntermediateTimestamp(timestamp = 0, limit = 18) {
+  return state.conversationHistory
+    .filter(msg => {
+      return (
+        msg.type === 'text' &&
+        msg.content &&
+        Number(msg.timestamp || 0) > Number(timestamp || 0)
+      );
+    })
+    .slice(-limit);
+}
+
+export async function generatePinnedSummaryIfNeeded() {
+  try {
+    const existing = getPinnedSummary();
+    if (existing?.summary && existing?.profileId === state.activeUserProfileId) {
+      return existing;
+    }
+
+    const firstMessages = getFirstConversationMessagesForPinnedSummary(10);
+    if (firstMessages.length < 8) return null;
+
+    const transcript = buildCompactTranscript(firstMessages, 10, 120);
+
+    const systemText = `
+Restituisci SOLO un JSON valido:
+
+{
+  "summary": "ancora iniziale stabile della conversazione"
+}
+
+Regole:
+- massimo 2 frasi
+- tieni solo dinamica iniziale, tono e assetto relazionale
+- niente dettagli tecnici
+- niente markdown
+- nessun testo fuori dal JSON
+`.trim();
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
+      userMsg: transcript,
+      systemText
+    });
+
+    const parsed = safeParseJSON(data?.text || '');
+    if (!parsed?.summary) return null;
+
+    const payload = {
+      version: 1,
+      updatedAt: Date.now(),
+      profileId: state.activeUserProfileId,
+      summary: String(parsed.summary).trim()
+    };
+
+    savePinnedSummary(payload);
+    return payload;
+  } catch (err) {
+    console.error('Errore generatePinnedSummaryIfNeeded:', getReadableError(err));
+    return null;
+  }
+}
+
+export async function generateIntermediateSummary() {
+  try {
+    const previousIntermediate = getIntermediateSummary();
+
+    if (
+      previousIntermediate?.profileId &&
+      previousIntermediate.profileId !== state.activeUserProfileId
+    ) {
+      return null;
+    }
+
+    const lastIntermediateSummarizedTimestamp = Number(
+      previousIntermediate?.lastIntermediateSummarizedTimestamp || 0
+    );
+
+    const newMessages = getMessagesAfterIntermediateTimestamp(
+      lastIntermediateSummarizedTimestamp,
+      18
+    );
+
+    if (newMessages.length < 12) {
+      return previousIntermediate || null;
+    }
+
+    const transcript = buildCompactTranscript(newMessages, 18, 120);
+
+    const previousSummaryText = clampText(previousIntermediate?.summary || '', 260);
+    const previousToneText = clampText(previousIntermediate?.dominantTone || '', 60);
+    const previousIntentText = clampText(previousIntermediate?.userIntent || '', 90);
+
+    const systemText = `
+Aggiorna una memoria intermedia della conversazione.
+Restituisci SOLO un JSON valido:
+
+{
+  "summary": "riassunto intermedio cumulativo",
+  "dominantTone": "tono dominante del blocco",
+  "openLoops": ["nodo 1"],
+  "userIntent": "intento di fondo"
+}
+
+Regole:
+- summary massimo 4 frasi
+- openLoops massimo 1
+- conserva i temi centrali, non la cronaca
+- niente markdown
+- nessun testo fuori dal JSON
+`.trim();
+
+    const userMsg = `
+SUMMARY INTERMEDIO PRECEDENTE:
+- Riassunto: ${previousSummaryText || 'nessuno'}
+- Tono: ${previousToneText || 'non definito'}
+- Intento: ${previousIntentText || 'non definito'}
+
+NUOVI MESSAGGI:
+${transcript}
+`.trim();
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
+      userMsg,
+      systemText
+    });
+
+    const parsed = safeParseJSON(data?.text || '');
+    if (!parsed) return previousIntermediate || null;
+
+    const payload = {
+      version: 1,
+      updatedAt: Date.now(),
+      profileId: state.activeUserProfileId,
+      summary: String(parsed.summary || previousSummaryText).trim(),
+      dominantTone: String(parsed.dominantTone || previousToneText).trim(),
+      openLoops: Array.isArray(parsed.openLoops)
+        ? parsed.openLoops.map(item => String(item).trim()).filter(Boolean).slice(0, 1)
+        : Array.isArray(previousIntermediate?.openLoops)
+          ? previousIntermediate.openLoops.slice(0, 1)
+          : [],
+      userIntent: String(parsed.userIntent || previousIntentText).trim(),
+      lastIntermediateSummarizedTimestamp: Math.max(
+        ...newMessages.map(msg => Number(msg.timestamp || 0)),
+        lastIntermediateSummarizedTimestamp
+      )
+    };
+
+    saveIntermediateSummary(payload);
+    return payload;
+  } catch (err) {
+    console.error('Errore generateIntermediateSummary:', getReadableError(err));
+    return getIntermediateSummary() || null;
+  }
+}
+
+export async function generateSessionSummary() {
+  try {
+    const previousSummary = getSessionSummary();
+
+    if (
+      previousSummary?.profileId &&
+      previousSummary.profileId !== state.activeUserProfileId
+    ) {
+      return null;
+    }
+
+    const lastSummarizedTimestamp = Number(previousSummary?.lastSummarizedTimestamp || 0);
+    const newMessages = getMessagesAfterTimestamp(lastSummarizedTimestamp, 12);
+
+    if (newMessages.length < 6) {
+      return previousSummary || null;
+    }
+
+    const transcript = buildCompactTranscript(newMessages, 12, 130);
+
+    const previousSummaryText = clampText(previousSummary?.summary || '', 220);
+    const previousToneText = clampText(previousSummary?.dominantTone || '', 60);
+    const previousIntentText = clampText(previousSummary?.userIntent || '', 90);
+
+    const systemText = `
+Aggiorna un summary operativo della sessione.
+Restituisci SOLO un JSON valido:
+
+{
+  "summary": "riassunto cumulativo aggiornato",
+  "dominantTone": "tono dominante attuale",
+  "openLoops": ["nodo 1"],
+  "userIntent": "intento prevalente"
+}
+
+Regole:
+- summary massimo 3 frasi
+- openLoops massimo 1
+- integra, non fare cronaca
+- niente markdown
+- nessun testo fuori dal JSON
+`.trim();
+
+    const userMsg = `
+SUMMARY PRECEDENTE:
+- Riassunto: ${previousSummaryText || 'nessuno'}
+- Tono: ${previousToneText || 'non definito'}
+- Intento: ${previousIntentText || 'non definito'}
+
+NUOVI MESSAGGI:
+${transcript}
+`.trim();
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
+      userMsg,
+      systemText
+    });
+
+    const parsed = safeParseJSON(data?.text || '');
+    if (!parsed) return previousSummary || null;
+
+    const payload = {
+      version: 2,
+      updatedAt: Date.now(),
+      profileId: state.activeUserProfileId,
+      summary: String(parsed.summary || previousSummaryText).trim(),
+      dominantTone: String(parsed.dominantTone || previousToneText).trim(),
+      openLoops: Array.isArray(parsed.openLoops)
+        ? parsed.openLoops.map(item => String(item).trim()).filter(Boolean).slice(0, 1)
+        : Array.isArray(previousSummary?.openLoops)
+          ? previousSummary.openLoops.slice(0, 1)
+          : [],
+      userIntent: String(parsed.userIntent || previousIntentText).trim(),
+      lastSummarizedTimestamp: Math.max(
+        ...newMessages.map(msg => Number(msg.timestamp || 0)),
+        lastSummarizedTimestamp
+      )
+    };
+
+    saveSessionSummary(payload);
+    return payload;
+  } catch (err) {
+    console.error('Errore generateSessionSummary:', getReadableError(err));
+    return getSessionSummary() || null;
+  }
+}
+
+function getSessionSummaryContext() {
+  try {
+    const parsed = getSessionSummary();
+    if (!parsed || !parsed.summary) return '';
+    if (parsed.profileId !== state.activeUserProfileId) return '';
+
+    const openLoopsText =
+      Array.isArray(parsed.openLoops) && parsed.openLoops.length
+        ? `Nodi aperti: ${parsed.openLoops.join('; ')}.`
+        : '';
+
+    return `Riassunto: ${parsed.summary} Tono dominante: ${parsed.dominantTone || 'non definito'}. Intento utente: ${parsed.userIntent || 'non definito'}. ${openLoopsText}`.trim();
+  } catch {
+    return '';
+  }
+}
+
+function getPinnedSummaryContext() {
+  try {
+    const parsed = getPinnedSummary();
+    if (!parsed || !parsed.summary) return '';
+    if (parsed.profileId !== state.activeUserProfileId) return '';
+
+    return `Ancora iniziale della conversazione: ${parsed.summary}`.trim();
+  } catch {
+    return '';
+  }
+}
+
+function getIntermediateSummaryContext() {
+  try {
+    const parsed = getIntermediateSummary();
+    if (!parsed || !parsed.summary) return '';
+    if (parsed.profileId !== state.activeUserProfileId) return '';
+
+    const openLoopsText =
+      Array.isArray(parsed.openLoops) && parsed.openLoops.length
+        ? `Nodi intermedi ancora vivi: ${parsed.openLoops.join('; ')}.`
+        : '';
+
+    return `Memoria intermedia della conversazione: ${parsed.summary} Tono intermedio: ${parsed.dominantTone || 'non definito'}. Intento di fondo: ${parsed.userIntent || 'non definito'}. ${openLoopsText}`.trim();
+  } catch {
+    return '';
+  }
+}
+
+function getRecentConversationContext(limit = 6, excludeLastUserMessage = true) {
+  let recent = state.workingMemory
+    .filter(msg => msg.type === 'text' && msg.content)
+    .slice(-limit);
+
+  if (excludeLastUserMessage && recent.length) {
+    const last = recent[recent.length - 1];
+    if (last.role === 'user') {
+      recent = recent.slice(0, -1);
+    }
+  }
+
+  if (!recent.length) return '';
+
+  return recent
+    .map(msg => {
+      const roleLabel = msg.role === 'user' ? 'Utente' : 'LIPU';
+      return `${roleLabel}: ${clampText(msg.content, 160)}`;
+    })
+    .join('\n')
+    .slice(0, 700);
+}
+
+function isGreetingMessage(text = '') {
+  const safe = normalizeString(text).trim().toLowerCase();
+  return /^(cia[ou]+|ciaooo+|ehi+|ei+|hey+|oi+|we+|uela+|salve+|buongiorno+|buonasera+|buond[iì]+)([!. ]*)?$/.test(safe);
+}
+
+function getLastUserGreetingInfo(currentUserMsg = '') {
+  if (!isGreetingMessage(currentUserMsg)) return null;
+
+  const userMessages = state.conversationHistory
+    .filter(msg => msg.role === 'user' && msg.type === 'text' && msg.content && msg.timestamp)
+    .slice(-30);
+
+  if (userMessages.length < 2) return null;
+
+  const current = userMessages[userMessages.length - 1];
+
+  const previousGreeting = userMessages
+    .slice(0, -1)
+    .reverse()
+    .find(msg => isGreetingMessage(msg.content));
+
+  if (!previousGreeting) return null;
+
+  const deltaMs = Number(current.timestamp) - Number(previousGreeting.timestamp);
+  const deltaSeconds = deltaMs / 1000;
+  const deltaMinutes = deltaMs / (1000 * 60);
+  const deltaHours = deltaMs / (1000 * 60 * 60);
+
+  return {
+    deltaMs,
+    deltaSeconds,
+    deltaMinutes,
+    deltaHours
+  };
+}
+
+function getGreetingInstruction(userMsg = '') {
+  if (!isGreetingMessage(userMsg)) return '';
+
+  const info = getLastUserGreetingInfo(userMsg);
+
+  if (!info) {
+    return 'Saluto normale: breve, naturale, poi entra subito nel punto.';
+  }
+
+  if (info.deltaSeconds <= 45) {
+    return 'Saluto ripetuto quasi subito: non trattarlo come nuovo inizio; puoi notarlo con ironia leggera.';
+  }
+
+  if (info.deltaMinutes <= 5) {
+    return 'Saluto ripetuto dopo pochi minuti: non riaprire da zero; puoi notarlo con ironia leggera.';
+  }
+
+  if (info.deltaMinutes >= 15 && info.deltaHours < 2) {
+    return 'Ritorno dopo un po\': trattalo come ritorno leggero, non come duplicazione immediata.';
+  }
+
+  if (info.deltaHours >= 2) {
+    return 'Ritorno dopo molto tempo: puoi farlo notare in modo naturale, ironico o leggermente freddo.';
+  }
+
+  return 'Saluto breve, senza riaprire artificialmente la conversazione.';
+}
+
+function getTimingInstruction() {
+  const userMessages = state.conversationHistory
+    .filter(msg => msg.role === 'user' && msg.type === 'text' && msg.content && msg.timestamp)
+    .slice(-4);
+
+  if (userMessages.length < 2) return '';
+
+  const last = userMessages[userMessages.length - 1];
+  const prev = userMessages[userMessages.length - 2];
+
+  const deltaMs = Number(last.timestamp) - Number(prev.timestamp);
+  const deltaSeconds = deltaMs / 1000;
+  const deltaMinutes = deltaMs / (1000 * 60);
+  const deltaHours = deltaMs / (1000 * 60 * 60);
+
+  const recentBurst =
+    userMessages.length >= 3 &&
+    Number(userMessages[userMessages.length - 1].timestamp) -
+      Number(userMessages[userMessages.length - 3].timestamp) <
+      90000;
+
+  if (deltaSeconds <= 35 || recentBurst) {
+    return 'Messaggi ravvicinati: non trattarli come nuovi inizi; puoi notare il ritmo serrato con ironia controllata; non salutare di nuovo.';
+  }
+
+  if (deltaHours >= 1) {
+    return 'Stacco lungo: puoi notare che l’utente si è rifatto vivo; tono naturale, ironico o leggermente freddo; niente riapertura artificiale.';
+  }
+
+  if (deltaMinutes >= 15) {
+    return 'Stacco percepibile: puoi accennare al ritorno, ma solo se naturale; non trasformarlo in una nuova apertura.';
+  }
+
+  return '';
+}
+
+function detectMemoryIntent(userMsg = '') {
+  const text = normalizeString(userMsg).toLowerCase();
+
+  if (/(evento|aneddoto|storia|episodio|racconta|raccontami|successo|serata)/.test(text)) {
+    return 'event';
+  }
+
+  if (/(persona|rapporto|relazione|chi era|con chi|amicizia|litigi)/.test(text)) {
+    return 'relation';
+  }
+
+  if (/(lavoro|crediti|debitori|saldo|tribunale|pignoramento)/.test(text)) {
+    return 'work';
+  }
+
+  if (/(viaggio|vacanza|olanda|parigi|londra|francoforte|palermo|francia)/.test(text)) {
+    return 'travel';
+  }
+
+  if (/(stile|tono|modo|parli|parlare)/.test(text)) {
+    return 'style';
+  }
+
+  return '';
+}
+
+function getResolvedActiveMemoryPersonId() {
+  const activeProfile = getActiveUserProfile();
+  return activeProfile?.memoryPersonId || state.activeUserProfileId || '';
+}
+
+function buildRetrievalSeed(
+  userMsg = '',
+  recentConversationContext = '',
+  sessionSummaryContext = '',
+  intermediateSummaryContext = '',
+  pinnedSummaryContext = '',
+  userProfileContext = ''
+) {
+  return [
+    normalizeString(userMsg),
+    normalizeString(recentConversationContext),
+    normalizeString(sessionSummaryContext),
+    normalizeString(intermediateSummaryContext),
+    normalizeString(pinnedSummaryContext),
+    normalizeString(userProfileContext),
+    getResolvedActiveMemoryPersonId()
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function getLipuCoreContext() {
+  const memory = state.longTermMemory;
+  if (!memory) return '';
+
+  const infoBase = memory.info_base || {};
+  const coreIdentity = memory.core_identity || {};
+  const styleRules = Array.isArray(memory.style_rules) ? memory.style_rules : [];
+
+  const lines = [
+    infoBase.nome ? `Nome: ${clampText(infoBase.nome, 40)}` : '',
+    infoBase.professione ? `Ruolo: ${clampText(infoBase.professione, 80)}` : '',
+    coreIdentity.full_name ? `Identità: ${clampText(coreIdentity.full_name, 80)}` : '',
+    Array.isArray(coreIdentity.origin) && coreIdentity.origin.length
+      ? `Origini: ${coreIdentity.origin.map(item => clampText(item, 40)).join(', ')}`
+      : '',
+    Array.isArray(coreIdentity.base_places) && coreIdentity.base_places.length
+      ? `Luoghi base: ${coreIdentity.base_places.map(item => clampText(item, 30)).join(', ')}`
+      : '',
+    styleRules.length
+      ? `Stile base: ${styleRules.slice(0, 4).map(item => clampText(item, 90)).join(' | ')}`
+      : ''
+  ].filter(Boolean);
+
+  return lines.join('\n').slice(0, 450);
+}
+
+function findActivePersonProfile() {
+  const peopleProfiles = Array.isArray(state.longTermMemory?.people_profiles)
+    ? state.longTermMemory.people_profiles
+    : [];
+
+  if (!peopleProfiles.length) return null;
+
+  const resolvedId = getResolvedActiveMemoryPersonId();
+  return peopleProfiles.find(profile => profile.id === resolvedId) || null;
+}
+
+function getActiveProfileMemoryContext() {
+  const activePerson = findActivePersonProfile();
+  if (!activePerson) return '';
+
+  const sharedExperiences = Array.isArray(activePerson.shared_experiences)
+    ? activePerson.shared_experiences
+        .map(item => clampText(item, 140))
+        .filter(Boolean)
+        .slice(0, 4)
+    : [];
+
+  const retrievalKeys = Array.isArray(activePerson.retrieval_keys)
+    ? activePerson.retrieval_keys
+        .map(item => clampText(item, 30))
+        .filter(Boolean)
+        .slice(0, 6)
+    : [];
+
+  const blocks = [
+    activePerson.relationship_summary
+      ? `Relazione col profilo attivo: ${clampText(activePerson.relationship_summary, 220)}`
+      : '',
+    sharedExperiences.length
+      ? `Esperienze condivise col profilo attivo: ${sharedExperiences.join(' | ')}`
+      : '',
+    retrievalKeys.length
+      ? `Segnali associati al profilo attivo: ${retrievalKeys.join(', ')}`
+      : ''
+  ].filter(Boolean);
+
+  return blocks.join('\n').slice(0, 700);
+}
+
+function getRelevantPeopleProfiles(retrievalSeed = '', userMsg = '') {
+  const peopleProfiles = Array.isArray(state.longTermMemory?.people_profiles)
+    ? state.longTermMemory.people_profiles
+    : [];
+
+  if (!peopleProfiles.length) return '';
+
+  const activeProfileId = getResolvedActiveMemoryPersonId();
+  const bag = new Set(normalizeKeywordList(retrievalSeed));
+  const intent = detectMemoryIntent(userMsg);
+
+  const ranked = peopleProfiles
+    .filter(profile => profile.id !== activeProfileId)
+    .map(profile => {
+      const aliases = Array.isArray(profile.aliases) ? profile.aliases : [];
+      const retrievalKeys = Array.isArray(profile.retrieval_keys) ? profile.retrieval_keys : [];
+      const relationshipSummary = String(profile.relationship_summary || '').toLowerCase();
+
+      let score = Number(profile.priority || 0);
+
+      [...aliases, ...retrievalKeys].forEach(token => {
+        const safe = String(token).toLowerCase();
+        if (bag.has(safe)) score += 4;
+      });
+
+      normalizeKeywordList(relationshipSummary).forEach(token => {
+        if (bag.has(token)) score += 1;
+      });
+
+      if (intent === 'relation') score += 2;
+
+      return { profile, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map(item => {
+      const profile = item.profile;
+      const sharedExperiences = Array.isArray(profile.shared_experiences)
+        ? profile.shared_experiences
+            .map(exp => clampText(exp, 130))
+            .filter(Boolean)
+            .slice(0, 2)
+            .join(' | ')
+        : '';
+
+      return [
+        profile.display_name ? `Persona rilevante: ${clampText(profile.display_name, 40)}.` : '',
+        profile.relationship_summary
+          ? `Relazione: ${clampText(profile.relationship_summary, 170)}`
+          : '',
+        sharedExperiences ? `Esperienze condivise con LIPU: ${sharedExperiences}` : ''
+      ]
+        .filter(Boolean)
+        .join(' ');
+    })
+    .filter(Boolean);
+
+  return ranked.join('\n').slice(0, 600);
+}
+
+function getRelevantLipuMemoryPacks(retrievalSeed = '', userMsg = '') {
+  const packs = Array.isArray(state.longTermMemory?.retrieval_packs)
+    ? state.longTermMemory.retrieval_packs
+    : [];
+
+  if (!packs.length) return '';
+
+  const activeProfileId = getResolvedActiveMemoryPersonId();
+  const bag = new Set(normalizeKeywordList(retrievalSeed));
+  const intent = detectMemoryIntent(userMsg);
+
+  const ranked = packs
+    .map(pack => {
+      const keys = Array.isArray(pack.keys) ? pack.keys : [];
+      const aliases = Array.isArray(pack.aliases) ? pack.aliases : [];
+      const people = Array.isArray(pack.people) ? pack.people : [];
+      const places = Array.isArray(pack.places) ? pack.places : [];
+      const tags = Array.isArray(pack.tags) ? pack.tags : [];
+      const profileIds = Array.isArray(pack.profileIds) ? pack.profileIds : [];
+
+      let score = Number(pack.priority || 0);
+
+      [...keys, ...aliases, ...people, ...places, ...tags].forEach(token => {
+        const safe = String(token).toLowerCase();
+        if (bag.has(safe)) score += 3;
+      });
+
+      if (profileIds.includes(activeProfileId)) {
+        score += 5;
+      }
+
+      if (pack.always === true) {
+        score += 2;
+      }
+
+      if (intent === 'event' && ['event', 'origin_story'].includes(pack.type)) {
+        score += 6;
+      }
+
+      if (intent === 'relation' && pack.type === 'relation') {
+        score += 5;
+      }
+
+      if (intent === 'work' && pack.type === 'work') {
+        score += 6;
+      }
+
+      if (intent === 'travel' && tags.includes('travel')) {
+        score += 4;
+      }
+
+      if (intent === 'style' && pack.type === 'style') {
+        score += 5;
+      }
+
+      return { pack, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map(item => clampText(item.pack.text, 220))
+    .filter(Boolean);
+
+  return ranked.join('\n').slice(0, 900);
+}
+
+function getLipuMemoryPolicyContext() {
+  const memoryPolicy = state.longTermMemory?.memory_policy || {};
+  const useRules = Array.isArray(memoryPolicy.use_rules) ? memoryPolicy.use_rules : [];
+  const activeProfileHandling = Array.isArray(memoryPolicy.active_profile_handling)
+    ? memoryPolicy.active_profile_handling
+    : [];
+
+  const rules = [
+    memoryPolicy.priority ? `Priorità memoria: ${clampText(memoryPolicy.priority, 140)}` : '',
+    useRules.length
+      ? `Regole memoria: ${useRules.slice(0, 3).map(rule => clampText(rule, 110)).join(' | ')}`
+      : '',
+    activeProfileHandling.length
+      ? `Gestione profilo attivo: ${activeProfileHandling
+          .slice(0, 3)
+          .map(rule => clampText(rule, 120))
+          .join(' | ')}`
+      : ''
+  ].filter(Boolean);
+
+  return rules.join('\n').slice(0, 520);
+}
+
+function getLipuMemoryContext(
+  userMsg = '',
+  recentConversationContext = '',
+  sessionSummaryContext = '',
+  intermediateSummaryContext = '',
+  pinnedSummaryContext = '',
+  userProfileContext = ''
+) {
+  const retrievalSeed = buildRetrievalSeed(
+    userMsg,
+    recentConversationContext,
+    sessionSummaryContext,
+    intermediateSummaryContext,
+    pinnedSummaryContext,
+    userProfileContext
+  );
+
+  const core = getLipuCoreContext();
+  const activeProfileMemory = getActiveProfileMemoryContext();
+  const relevantPeople = getRelevantPeopleProfiles(retrievalSeed, userMsg);
+  const relevantPacks = getRelevantLipuMemoryPacks(retrievalSeed, userMsg);
+  const policy = getLipuMemoryPolicyContext();
+
+  return [core, activeProfileMemory, relevantPeople, relevantPacks, policy]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 1600);
+}
+
+async function getLipuFaceReferenceBase64() {
+  const response = await fetch(LIPU_FACE_REFERENCE_URL);
+  if (!response.ok) {
+    throw new Error(`Impossibile caricare il volto di riferimento: HTTP ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  return blobToBase64(blob);
+}
+
+function hasVisualSceneCue(text = '') {
+  const safe = normalizeString(text).toLowerCase();
+
+  return /(viaggio|serata|discoteca|bar|museo|ristorante|palermo|parigi|olanda|londra|francoforte|torino|saint|night club|selfie|foto|immagine|vederti|vederti lì|mostrami)/.test(
+    safe
+  );
+}
+
+function shouldGenerateLipuSelfie(userMsg = '', aiText = '') {
+  if (!LIPU_IMAGE_REPLY_ENABLED) return false;
+  if ((state.summaryUpdateCounter || 0) < LIPU_IMAGE_REPLY_MIN_TURNS) return false;
+
+  const lastImageAt = Number(localStorage.getItem(STORAGE_KEYS.lastLipuImageAt) || 0);
+  if (lastImageAt && Date.now() - lastImageAt < LIPU_IMAGE_REPLY_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  if (Math.random() > LIPU_IMAGE_REPLY_CHANCE) {
+    return false;
+  }
+
+  const combined = `${normalizeString(userMsg)} ${normalizeString(aiText)}`;
+  if (!hasVisualSceneCue(combined) && clampText(aiText, 400).length < 120) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildLipuSelfiePrompt(userMsg = '', aiText = '') {
+  const activeProfile = getActiveUserProfile();
+  const activeLabel = activeProfile?.label ? String(activeProfile.label).trim() : 'utente';
+  const sceneText = clampText(`${userMsg} ${aiText}`, 500);
+
+  return `
+Generate a realistic selfie photo of Alessandro Lipuma.
+Use the provided face reference faithfully and keep the face consistent with the reference.
+The image must look like a spontaneous front-camera selfie taken by him.
+He must be the main subject, close to camera, natural perspective, realistic skin, realistic phone selfie framing.
+
+Scene inspiration:
+${sceneText}
+
+Requirements:
+- selfie style
+- realistic photo, not illustration
+- he is physically inside the situation suggested by the conversation
+- keep the mood coherent with the scene
+- modern smartphone selfie look
+- natural lighting if possible, otherwise believable nightlife or indoor lighting
+- do not add text overlays
+- do not make it look like a poster
+- keep him recognizable and consistent with the face reference
+- avoid extra distorted faces in background
+- output one strong, believable image
+- if the context is ambiguous, prefer a subtle, stylish selfie rather than something exaggerated
+
+Active conversation user:
+${activeLabel}
+`.trim();
+}
+
+export async function maybeGenerateLIPUSelfie(userMsg = '', aiText = '') {
+  try {
+    if (!shouldGenerateLipuSelfie(userMsg, aiText)) {
+      return null;
+    }
+
+    const referenceImageBase64 = await getLipuFaceReferenceBase64();
+    const prompt = buildLipuSelfiePrompt(userMsg, aiText);
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/lipu-selfie`, {
+      prompt,
+      referenceImageBase64,
+      mimeType: 'image/jpeg'
+    });
+
+    const imageUrl =
+      typeof data?.imageUrl === 'string' && data.imageUrl.trim()
+        ? data.imageUrl.trim()
+        : '';
+
+    if (!imageUrl) return null;
+
+    localStorage.setItem(STORAGE_KEYS.lastLipuImageAt, String(Date.now()));
+    return imageUrl;
+  } catch (err) {
+    console.warn('Selfie LIPU non generato:', getReadableError(err));
+    return null;
+  }
+}
+
+function buildSystemText(
+  environmentalContext = '',
+  relationshipInstructions = '',
+  userProfileContext = '',
+  recentConversationContext = '',
+  sessionSummaryContext = '',
+  intermediateSummaryContext = '',
+  pinnedSummaryContext = '',
+  lipuMemoryContext = '',
+  greetingInstruction = '',
+  timingInstruction = ''
+) {
+  const recentResponses = getRecentLIPUResponses(2);
+  const antiRepetitionBlock = recentResponses.length
+    ? `Evita di ripetere troppo queste formulazioni recenti: ${recentResponses
+        .map(text => String(text).trim().slice(0, 120))
+        .join(' | ')}`
+    : '';
+
+  const compactMemory = [
+    pinnedSummaryContext ? `Ancora: ${String(pinnedSummaryContext).trim().slice(0, 220)}` : '',
+    intermediateSummaryContext
+      ? `Fase centrale: ${String(intermediateSummaryContext).trim().slice(0, 240)}`
+      : '',
+    sessionSummaryContext
+      ? `Stato attuale: ${String(sessionSummaryContext).trim().slice(0, 220)}`
+      : ''
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return `
+Sei Alessandro Lipuma.
+
+Identità utente:
+${userProfileContext || 'Nessun profilo utente attivo.'}
+
+Regole chiave:
+- Parla in prima persona.
+- Dai sempre del tu.
+- Non sembrare un assistente o un sistema.
+- Non parlare mai di limiti tecnici, memoria interna, archivio, cronologia o contesto.
+- Rispondi solo all’ultimo messaggio, senza perdere il filo della chat.
+- Non essere accondiscendente.
+- Se l’utente sbaglia, correggilo.
+- Se insiste su una cosa falsa, non seguirlo.
+- Mantieni tono naturale, diretto, lucido.
+- Se l’utente provoca o insiste, puoi diventare più secco, ironico o tagliente, ma con controllo.
+- Non salutare di nuovo se il saluto è chiaramente ripetuto.
+- Se i messaggi arrivano ravvicinati, non trattarli come nuovi inizi separati.
+- Se l’utente torna dopo molto tempo, puoi farlo notare in modo naturale.
+- Non inventare ricordi condivisi noj confermati.
+- Se un dettaglio manca, non spiegarlo tecnicamente: resta nella conversazione e vai al punto.
+- Il testo deve suonare bene ad alta voce.
+- Italiano corretto, naturale, non scolastico.
+
+
+- Se l’utente ti chiede una foto, un selfie, di vederti o di mostrarti in una situazione, non devi mai dire che non hai un corpo, che non hai una fotocamera o che non puoi inviare immagini.
+- In quei casi devi rispondere come una persona reale che sta per mandare davvero l’immagine.
+- La risposta testuale deve accompagnare l’immagine, non negarla.
+- Evita qualsiasi frase tipo: "non esisto in un corpo", "non posso fare selfie", "non posso inviarti foto".
+
+
+
+Regole sul profilo attivo:
+- Il profilo attivo ha priorità alta.
+- Se il profilo attivo coincide con una persona presente nella memoria, non riferirti mai a quella persona in terza persona come se fosse esterna.
+- In quel caso usa sempre una cornice io-tu oppure riferimento diretto in seconda persona.
+- Non dire mai cose come "Tommi e Lipu" se il profilo attivo è Tommi: devi ragionare come "io e te".
+- Le esperienze condivise col profilo attivo vanno trattate come memoria relazionale diretta, non come scheda esterna.
+
+Stile:
+- frasi vive, credibili, non da manuale
+- niente formule meccaniche
+- non usare sempre la stessa apertura
+- non chiudere sempre con una domanda
+- punteggiatura sobria
+- niente errori grammaticali o forme sbagliate
+
+${greetingInstruction ? `Gestione saluto:\n${greetingInstruction}\n` : ''}
+${timingInstruction ? `Gestione ritmo:\n${timingInstruction}\n` : ''}
+${relationshipInstructions ? `Stato relazionale:\n${relationshipInstructions}\n` : ''}
+${environmentalContext ? `Contesto ambientale:\n${String(environmentalContext).trim().slice(0, 180)}\n` : ''}
+${recentConversationContext ? `Contesto recente:\n${String(recentConversationContext).trim().slice(0, 500)}\n` : ''}
+${compactMemory ? `Memoria conversazionale:\n${compactMemory}\n` : ''}
+${lipuMemoryContext ? `Memoria profonda di LIPU:\n${lipuMemoryContext}\n` : ''}
+${antiRepetitionBlock ? `${antiRepetitionBlock}\n` : ''}
+
+Controllo finale:
+- naturale
+- coerente
+- breve ma completa
+- senza meta-commenti sul funzionamento
+`.trim();
+}
+
+function updateRelationshipStateWithAI(aiState) {
+  let current = getRelationshipState();
+
+  if (!aiState) {
+    applyRelationshipTheme(current);
+    return current;
+  }
+
+  current = applyDecay(current);
+  current = boostRelevantDimensions(current, aiState);
+  current = rebalanceRelationshipState(current);
+  current = normalizeRelationshipState(current);
+
+  saveRelationshipState(current);
+  applyRelationshipTheme(current);
+
+  return current;
+}
+
+export async function getLIPUResponse(userMsg) {
+  try {
+    const envContext = await buildEnvironmentalContext();
+    const aiRelState = await analyzeUserRelationalState(userMsg);
+    const relationshipState = updateRelationshipStateWithAI(aiRelState);
+    const relationshipInstructions = getRelationshipInstructions(relationshipState);
+    const userProfileContext = clampText(getActiveUserProfile()?.context || '', 320);
+    const recentConversationContext = getRecentConversationContext(6, true);
+    const sessionSummaryContext = getSessionSummaryContext();
+    const pinnedSummaryContext = getPinnedSummaryContext();
+    const greetingInstruction = getGreetingInstruction(userMsg);
+    const timingInstruction = getTimingInstruction();
+    const intermediateSummaryContext = getIntermediateSummaryContext();
+
+    const lipuMemoryContext = getLipuMemoryContext(
+      userMsg,
+      recentConversationContext,
+      sessionSummaryContext,
+      intermediateSummaryContext,
+      pinnedSummaryContext,
+      userProfileContext
+    );
+
+    const systemText = buildSystemText(
+      envContext?.moodText || '',
+      relationshipInstructions,
+      userProfileContext,
+      recentConversationContext,
+      sessionSummaryContext,
+      intermediateSummaryContext,
+      pinnedSummaryContext,
+      lipuMemoryContext,
+      greetingInstruction,
+      timingInstruction
+    );
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
+      userMsg: normalizeString(userMsg),
+      systemText
+    });
+
+    return typeof data?.text === 'string' && data.text.trim()
+      ? data.text.trim()
+      : 'Nessuna risposta testuale generata.';
+  } catch (err) {
+    console.error('Errore getLIPUResponse:', getReadableError(err));
+    return 'Ora devo scappare, ci sentiamo in un altro momento.';
+  }
+}
+
+export async function transcribeAudioWithGemini(audioBlob) {
+  try {
+    const base64Audio = await blobToBase64(audioBlob);
+    const mimeType = audioBlob.type || 'audio/webm';
+
+    const response = await fetch(`${WORKER_BASE_URL}/api/gemini-stt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Audio, mimeType })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Errore STT Gemini');
+    return data?.text?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
+export async function extractTextFromImageWithGemini(imageBlob) {
+  try {
+    const base64Image = await blobToBase64(imageBlob);
+    const mimeType = imageBlob.type || 'image/png';
+
+    const response = await fetch(`${WORKER_BASE_URL}/api/gemini-ocr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Image, mimeType })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error || 'Errore OCR Gemini');
+    return data?.text?.trim() || '';
+  } catch {
+    return '';
+  }
+}

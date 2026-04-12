@@ -1,0 +1,26 @@
+export const dom = {
+  confirmProfileModal: document.getElementById('confirm-profile-modal'),
+confirmProfileBackdrop: document.getElementById('confirm-profile-backdrop'),
+confirmProfileCancel: document.getElementById('confirm-profile-cancel'),
+confirmProfileConfirm: document.getElementById('confirm-profile-confirm'),
+exportMemoryBtn: document.getElementById('export-memory-btn'),
+importMemoryBtn: document.getElementById('import-memory-btn'),
+importMemoryInput: document.getElementById('import-memory-input'),
+  chatBox: document.getElementById('chat-box'),
+  userInput: document.getElementById('user-input'),
+  sendBtn: document.getElementById('send-btn'),
+  recordBtn: document.getElementById('record-btn'),
+  imageBtn: document.getElementById('image-btn'),
+  imageInput: document.getElementById('image-input'),
+  waveform: document.getElementById('waveform'),
+  recordingStatus: document.getElementById('recording-status'),
+  recordingTime: document.getElementById('recording-time'),
+  recordingUI: document.getElementById('recording-ui'),
+
+  settingsTrigger: document.getElementById('lipu-settings-trigger'),
+  settingsModal: document.getElementById('settings-modal'),
+  settingsBackdrop: document.getElementById('settings-backdrop'),
+  settingsCloseBtn: document.getElementById('settings-close-btn'),
+  replyModeInputs: document.querySelectorAll('input[name="lipu-reply-mode"]'),
+  userProfileInputs: document.querySelectorAll('input[name="lipu-user-profile"]')
+};
