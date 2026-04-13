@@ -63,6 +63,14 @@
           autocomplete="off"
         />
 
+        <div id="image-preview-container" class="image-preview-container hidden">
+          <div class="image-preview-wrap">
+            <img id="image-preview" class="image-preview" />
+            <div id="face-count-badge" class="face-count-badge hidden"></div>
+          </div>
+          <div id="face-crops" class="face-crops"></div>
+        </div>
+
         <div class="recording-ui" id="recording-ui">
           <span id="recording-status">Registrazione...</span>
 
@@ -216,6 +224,10 @@
     </div>
   </div>
 
-  <script type="module" src="./js/main.js"></script>
+</body>
+<!-- TensorFlow + Face Detection -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection"></script>
+<script type="module" src="./js/main.js"></script>
 </body>
 </html>

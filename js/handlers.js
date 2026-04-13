@@ -1,7 +1,6 @@
 import { dom } from './dom.js';
 import {
-  ELEVENLABS_API_KEY,
-  VOICE_ID,
+  WORKER_BASE_URL,
   MAX_CONVERSATION_HISTORY_MESSAGES
 } from './config.js';
 import { state, saveWorkingMemory, saveConversationHistory } from './state.js';
@@ -22,16 +21,466 @@ import {
   getLIPUResponse,
   transcribeAudioWithGemini,
   extractTextFromImageWithGemini,
+  extractImageContextWithGemini,
   generateSessionSummary,
   generateIntermediateSummary,
-  generatePinnedSummaryIfNeeded,
-  maybeGenerateLIPUSelfie
+  generatePinnedSummaryIfNeeded
 } from './services.js';
 import {
   startRecording,
   stopRecording,
   resetAudioComposerState
 } from './recorder.js';
+
+let pendingImageFile = null;
+let pendingImagePreviewUrl = '';
+let pendingImageUI = null;
+
+let faceDetectors = {
+  short: null,
+  full: null
+};
+let faceDetectorPromises = {
+  short: null,
+  full: null
+};
+let pendingFaceDetections = [];
+let pendingFaceAnalysisId = 0;
+
+function getImagePreviewElements() {
+  return {
+    container: document.getElementById('image-preview-container'),
+    preview: document.getElementById('image-preview'),
+    badge: document.getElementById('face-count-badge'),
+    crops: document.getElementById('face-crops')
+  };
+}
+
+function normalizeExtractedImageText(value = '') {
+  const safe = normalizeString(value).trim();
+  if (!safe) return '';
+
+  const lower = safe.toLowerCase();
+  if (lower === '(no text)' || lower === 'no text' || lower === 'nessun testo') {
+    return '';
+  }
+
+  return safe;
+}
+
+function isCurrentPendingPreview(previewUrl = '') {
+  return Boolean(previewUrl && previewUrl === pendingImagePreviewUrl);
+}
+
+async function ensureFaceDetector(modelType = 'full') {
+  const safeModelType = modelType === 'short' ? 'short' : 'full';
+
+  if (faceDetectors[safeModelType]) {
+    return faceDetectors[safeModelType];
+  }
+
+  if (faceDetectorPromises[safeModelType]) {
+    return faceDetectorPromises[safeModelType];
+  }
+
+  const faceDetectionLib = window.faceDetection;
+  const tfLib = window.tf;
+
+  if (!faceDetectionLib || !tfLib) {
+    throw new Error('Face Detection non disponibile');
+  }
+
+  faceDetectorPromises[safeModelType] = faceDetectionLib
+    .createDetector(faceDetectionLib.SupportedModels.MediaPipeFaceDetector, {
+      runtime: 'tfjs',
+      maxFaces: 10,
+      modelType: safeModelType
+    })
+    .then(detector => {
+      faceDetectors[safeModelType] = detector;
+      return detector;
+    })
+    .catch(err => {
+      faceDetectors[safeModelType] = null;
+      throw err;
+    })
+    .finally(() => {
+      faceDetectorPromises[safeModelType] = null;
+    });
+
+  return faceDetectorPromises[safeModelType];
+}
+
+function clearFacePreviewUI() {
+  const { container, preview, badge, crops } = getImagePreviewElements();
+
+  pendingFaceDetections = [];
+  pendingFaceAnalysisId += 1;
+
+  if (preview) {
+    preview.removeAttribute('src');
+  }
+
+  if (badge) {
+    badge.textContent = '';
+    badge.classList.add('hidden');
+  }
+
+  if (crops) {
+    crops.innerHTML = '';
+  }
+
+  if (container) {
+    container.classList.add('hidden');
+  }
+}
+
+function updateFaceCountBadge(count) {
+  const { badge } = getImagePreviewElements();
+  if (!badge) return;
+
+  if (!count) {
+    badge.textContent = '';
+    badge.classList.add('hidden');
+    return;
+  }
+
+  badge.textContent = count === 1 ? '1 volto' : `${count} volti`;
+  badge.classList.remove('hidden');
+}
+
+
+function buildDetectionCanvasFromImage(imageElement) {
+  if (!imageElement || !imageElement.naturalWidth || !imageElement.naturalHeight) {
+    return null;
+  }
+
+  const maxSide = 960;
+  const naturalWidth = imageElement.naturalWidth;
+  const naturalHeight = imageElement.naturalHeight;
+  const scale = Math.min(1, maxSide / Math.max(naturalWidth, naturalHeight));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(naturalHeight * scale));
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+
+  ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
+
+  return {
+    canvas,
+    scaleX: naturalWidth / canvas.width,
+    scaleY: naturalHeight / canvas.height
+  };
+}
+
+function normalizeDetectionBox(detection, scaleX = 1, scaleY = 1) {
+  const box = detection?.box || detection?.boundingBox;
+  if (!box) return null;
+
+  const xMin = Number(box.xMin ?? 0) * scaleX;
+  const yMin = Number(box.yMin ?? 0) * scaleY;
+  const width = Number(box.width ?? 0) * scaleX;
+  const height = Number(box.height ?? 0) * scaleY;
+
+  if (![xMin, yMin, width, height].every(Number.isFinite)) return null;
+  if (width <= 0 || height <= 0) return null;
+  if (width < 28 || height < 28) return null;
+
+  const aspectRatio = width / height;
+  if (aspectRatio < 0.55 || aspectRatio > 1.8) return null;
+
+  return {
+    ...detection,
+    box: {
+      xMin,
+      yMin,
+      width,
+      height
+    }
+  };
+}
+
+async function detectFacesWithFallback(source) {
+  const fullDetector = await ensureFaceDetector('full');
+  let detections = await fullDetector.estimateFaces(source, { flipHorizontal: false });
+
+  if (!Array.isArray(detections)) {
+    detections = [];
+  }
+
+  if (!detections.length) {
+    const shortDetector = await ensureFaceDetector('short');
+    const fallbackDetections = await shortDetector.estimateFaces(source, { flipHorizontal: false });
+    detections = Array.isArray(fallbackDetections) ? fallbackDetections : [];
+  }
+
+  return detections;
+}
+
+function renderFaceCrops(sourceImage, detections = []) {
+  const { crops } = getImagePreviewElements();
+  if (!crops) return;
+
+  crops.innerHTML = '';
+
+  detections.forEach((detection, index) => {
+    const box = detection?.box || detection?.boundingBox;
+    if (!box) return;
+    if (!sourceImage.complete || !sourceImage.naturalWidth || !sourceImage.naturalHeight) return;
+
+    const naturalWidth = sourceImage.naturalWidth;
+    const naturalHeight = sourceImage.naturalHeight;
+
+    const xMin = Number(box.xMin ?? 0);
+    const yMin = Number(box.yMin ?? 0);
+    const width = Number(box.width ?? 0);
+    const height = Number(box.height ?? 0);
+
+    if (![xMin, yMin, width, height].every(Number.isFinite)) return;
+    if (width <= 0 || height <= 0) return;
+
+    const padX = width * 0.28;
+    const padY = height * 0.35;
+
+    const sx = Math.max(0, Math.floor(xMin - padX));
+    const sy = Math.max(0, Math.floor(yMin - padY));
+    const sw = Math.min(naturalWidth - sx, Math.floor(width + padX * 2));
+    const sh = Math.min(naturalHeight - sy, Math.floor(height + padY * 2));
+
+    if (sw <= 0 || sh <= 0) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = sw;
+    canvas.height = sh;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.drawImage(sourceImage, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    const cropWrap = document.createElement('div');
+    cropWrap.className = 'face-crop-item';
+    cropWrap.style.display = 'flex';
+    cropWrap.style.flexDirection = 'column';
+    cropWrap.style.alignItems = 'center';
+    cropWrap.style.gap = '4px';
+
+    const cropImg = document.createElement('img');
+    cropImg.src = canvas.toDataURL('image/png');
+    cropImg.alt = `Volto ${index + 1}`;
+    cropImg.className = 'face-crop-image';
+    cropImg.style.width = '52px';
+    cropImg.style.height = '52px';
+    cropImg.style.objectFit = 'cover';
+    cropImg.style.borderRadius = '10px';
+    cropImg.style.border = '1px solid rgba(255,255,255,0.08)';
+
+    const label = document.createElement('span');
+    label.className = 'face-crop-label';
+    label.textContent = `#${index + 1}`;
+    label.style.fontSize = '11px';
+    label.style.color = 'rgba(255,255,255,0.68)';
+
+    cropWrap.appendChild(cropImg);
+    cropWrap.appendChild(label);
+    crops.appendChild(cropWrap);
+  });
+}
+
+async function analyzePendingImageFaces(previewUrl) {
+  const analysisId = ++pendingFaceAnalysisId;
+  const { container, preview, badge, crops } = getImagePreviewElements();
+  if (!container || !preview || !badge || !crops || !previewUrl) return;
+
+  container.classList.remove('hidden');
+  preview.src = previewUrl;
+  badge.textContent = 'analisi...';
+  badge.classList.remove('hidden');
+  crops.innerHTML = '';
+
+  try {
+    if (!isCurrentPendingPreview(previewUrl)) return;
+
+    if (!preview.complete) {
+      await preview.decode().catch(() => undefined);
+    }
+
+    if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
+
+    const detectionSource = buildDetectionCanvasFromImage(preview);
+    if (!detectionSource?.canvas) {
+      throw new Error('Immagine preview non pronta per face detection');
+    }
+
+    const rawDetections = await detectFacesWithFallback(detectionSource.canvas);
+
+    if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
+
+    pendingFaceDetections = rawDetections
+      .map(detection => normalizeDetectionBox(detection, detectionSource.scaleX, detectionSource.scaleY))
+      .filter(Boolean)
+      .sort((a, b) => {
+        const areaA = (a?.box?.width || 0) * (a?.box?.height || 0);
+        const areaB = (b?.box?.width || 0) * (b?.box?.height || 0);
+        return areaB - areaA;
+      });
+
+    updateFaceCountBadge(pendingFaceDetections.length);
+    renderFaceCrops(preview, pendingFaceDetections);
+  } catch (err) {
+    console.error('Errore analyzePendingImageFaces:', err);
+
+    if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
+
+    pendingFaceDetections = [];
+    badge.textContent = '';
+    badge.classList.add('hidden');
+    crops.innerHTML = '';
+  }
+}
+
+function ensurePendingImageUI() {
+  if (pendingImageUI || !dom.userInput) return pendingImageUI;
+
+  const composerCenter = dom.userInput.closest('.composer-center') || dom.userInput.parentElement;
+  if (!composerCenter) return null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'pending-image-chip';
+  wrap.style.display = 'none';
+  wrap.style.alignItems = 'center';
+  wrap.style.gap = '8px';
+  wrap.style.paddingRight = '10px';
+  wrap.style.flexShrink = '0';
+
+  const preview = document.createElement('img');
+  preview.className = 'pending-image-preview';
+  preview.alt = 'Immagine pronta da inviare';
+  preview.style.width = '34px';
+  preview.style.height = '34px';
+  preview.style.borderRadius = '10px';
+  preview.style.objectFit = 'cover';
+  preview.style.border = '1px solid rgba(255,255,255,0.08)';
+
+  const label = document.createElement('span');
+  label.className = 'pending-image-label';
+  label.textContent = 'Immagine';
+  label.style.fontSize = '12px';
+  label.style.color = 'rgba(255,255,255,0.72)';
+  label.style.whiteSpace = 'nowrap';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'pending-image-remove';
+  removeBtn.textContent = '×';
+  removeBtn.setAttribute('aria-label', 'Rimuovi immagine');
+  removeBtn.style.width = '26px';
+  removeBtn.style.height = '26px';
+  removeBtn.style.border = 'none';
+  removeBtn.style.borderRadius = '999px';
+  removeBtn.style.cursor = 'pointer';
+  removeBtn.style.background = 'rgba(255,255,255,0.08)';
+  removeBtn.style.color = 'white';
+  removeBtn.style.fontSize = '16px';
+  removeBtn.style.lineHeight = '1';
+  removeBtn.style.display = 'grid';
+  removeBtn.style.placeItems = 'center';
+
+  removeBtn.addEventListener('click', () => {
+    clearPendingImage();
+    dom.userInput?.focus();
+  });
+
+  wrap.appendChild(preview);
+  wrap.appendChild(label);
+  wrap.appendChild(removeBtn);
+  composerCenter.insertBefore(wrap, dom.userInput);
+
+  pendingImageUI = {
+    wrap,
+    preview,
+    label,
+    removeBtn
+  };
+
+  return pendingImageUI;
+}
+
+function updatePendingImageUI() {
+  const ui = ensurePendingImageUI();
+  if (!ui) return;
+
+  if (pendingImageFile && pendingImagePreviewUrl) {
+    ui.preview.src = pendingImagePreviewUrl;
+    ui.label.textContent = pendingImageFile.name || 'Immagine';
+    ui.wrap.style.display = 'inline-flex';
+    analyzePendingImageFaces(pendingImagePreviewUrl).catch(err => {
+      console.error('Errore preview face detection:', err);
+    });
+  } else {
+    ui.preview.removeAttribute('src');
+    ui.label.textContent = 'Immagine';
+    ui.wrap.style.display = 'none';
+    clearFacePreviewUI();
+  }
+}
+
+function setPendingImage(file) {
+  if (!file) return;
+
+  if (pendingImagePreviewUrl) {
+    URL.revokeObjectURL(pendingImagePreviewUrl);
+  }
+
+  pendingImageFile = file;
+  pendingImagePreviewUrl = URL.createObjectURL(file);
+  updatePendingImageUI();
+}
+
+function clearPendingImage() {
+  if (pendingImagePreviewUrl) {
+    URL.revokeObjectURL(pendingImagePreviewUrl);
+  }
+
+  pendingImageFile = null;
+  pendingImagePreviewUrl = '';
+  clearFacePreviewUI();
+  updatePendingImageUI();
+}
+
+async function buildImagePrompt(file, userText = '') {
+  const rawExtractedText = await extractTextFromImageWithGemini(file);
+  const extractedText = normalizeExtractedImageText(rawExtractedText);
+  console.log('[buildImagePrompt] extractedText:', extractedText);
+
+  const imageContext = await extractImageContextWithGemini(file);
+  console.log('[buildImagePrompt] imageContext:', imageContext);
+
+  return `
+L'utente ha inviato un'immagine${userText ? ' accompagnata da un messaggio' : ''}.
+
+Messaggio dell'utente:
+${userText || 'nessun testo scritto'}
+
+Testo estratto dall'immagine:
+${extractedText || 'nessun testo rilevante'}
+
+Contesto visivo dell'immagine:
+- scena: ${imageContext?.scene || 'non definita'}
+- tipo/contesto: ${imageContext?.context || 'non definito'}
+- tono visivo: ${imageContext?.mood || 'non definito'}
+- testo visibile sintetico: ${imageContext?.visibleText || 'nessuno'}
+- volti rilevati in preview: ${pendingFaceDetections.length || 0}
+
+Regole:
+- considera sia il testo visibile sia il contenuto visivo generale
+- se non c'è testo, reagisci comunque all'immagine
+- non inventare dettagli troppo specifici
+`.trim();
+}
 
 function trimMemory() {
   state.workingMemory = state.workingMemory
@@ -72,6 +521,10 @@ function disableComposer(disabled) {
   dom.recordBtn.disabled = disabled;
   dom.userInput.disabled = disabled;
   dom.imageBtn.disabled = disabled;
+
+  if (pendingImageUI?.removeBtn) {
+    pendingImageUI.removeBtn.disabled = disabled;
+  }
 }
 
 export function showAudioHint(text) {
@@ -165,19 +618,13 @@ async function speakAndRenderLIPU(text) {
   }
 
   try {
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
+    const response = await fetch(`${WORKER_BASE_URL}/api/elevenlabs-tts`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'xi-api-key': ELEVENLABS_API_KEY
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        text: safeText,
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75
-        }
+        text: safeText
       })
     });
 
@@ -245,17 +692,6 @@ async function deliverLIPUResponse(aiText) {
   await speakAndRenderLIPU(safeText);
 }
 
-async function maybeSendLIPUSelfie(sceneText, aiText) {
-  try {
-    const imageUrl = await maybeGenerateLIPUSelfie(sceneText, aiText);
-    if (!imageUrl) return;
-
-    renderImageMessage('lipu', imageUrl);
-  } catch (err) {
-    console.warn('Errore selfie LIPU:', err);
-  }
-}
-
 function getReadableError(err) {
   if (!err) return 'Errore sconosciuto';
 
@@ -300,25 +736,42 @@ function updateSummariesIfNeeded() {
 
 export async function handleTextMessage() {
   const text = dom.userInput.value.trim();
-  if (!text) return;
+  const imageFile = pendingImageFile;
 
-  renderMessage('user', text);
-  saveTextToMemory('user', text);
-  dom.userInput.value = '';
+  if (!text && !imageFile) return;
 
   disableComposer(true);
 
   try {
+    if (text) {
+      renderMessage('user', text);
+    }
+
+    if (imageFile) {
+      const imageDataUrl = await blobToDataURL(imageFile);
+      renderImageMessage('user', imageDataUrl);
+    }
+
+    dom.userInput.value = '';
+
     renderLIPULoadingMessage(
       state.lipuReplyMode === 'text'
         ? 'Lipu sta scrivendo...'
         : 'Lipu sta registrando...'
     );
 
-    const aiText = await getLIPUResponse(text);
+    let userPrompt = text;
+
+    if (imageFile) {
+      userPrompt = await buildImagePrompt(imageFile, text);
+    }
+
+    saveTextToMemory('user', text || 'Immagine inviata');
+
+    const aiText = await getLIPUResponse(userPrompt || text);
     await deliverLIPUResponse(aiText);
-    await maybeSendLIPUSelfie(text, aiText);
     updateSummariesIfNeeded();
+    clearPendingImage();
   } catch (err) {
     removeLIPULoadingMessage();
     console.error('Errore handleTextMessage:', err);
@@ -365,7 +818,6 @@ export async function handleAudioMessage() {
     }
 
     await deliverLIPUResponse(aiText);
-    await maybeSendLIPUSelfie(transcript, aiText);
     updateSummariesIfNeeded();
     resetAudioComposerState();
   } catch (err) {
@@ -380,8 +832,6 @@ export async function handleAudioMessage() {
 export async function handleImageMessage(file) {
   if (!file) return;
 
-  disableComposer(true);
-
   try {
     console.log('[handleImageMessage] File ricevuto:', {
       name: file.name,
@@ -389,58 +839,21 @@ export async function handleImageMessage(file) {
       size: file.size
     });
 
-    const imageDataUrl = await blobToDataURL(file);
-    console.log('[handleImageMessage] imageDataUrl creato');
-
-    renderImageMessage('user', imageDataUrl);
-    console.log('[handleImageMessage] immagine renderizzata');
-
-    dom.recordingStatus.textContent = 'Analisi immagine...';
-
-    const extractedText = await extractTextFromImageWithGemini(file);
-    console.log('[handleImageMessage] extractedText:', extractedText);
-
-    if (!extractedText || !extractedText.trim()) {
-      throw new Error('Nessun testo estratto dall’immagine');
-    }
-
-    saveTextToMemory('user', extractedText);
-
-    renderLIPULoadingMessage(
-      state.lipuReplyMode === 'text'
-        ? 'Lipu sta scrivendo...'
-        : 'Lipu sta registrando...'
-    );
-
-    const aiText = await getLIPUResponse(extractedText);
-    console.log('[handleImageMessage] aiText:', aiText);
-
-    if (!aiText || !aiText.trim()) {
-      throw new Error('Risposta AI vuota dopo analisi immagine');
-    }
-
-    await deliverLIPUResponse(aiText);
-    await maybeSendLIPUSelfie(extractedText, aiText);
-    updateSummariesIfNeeded();
-
-    dom.recordingStatus.textContent = 'Registrazione...';
-    dom.recordingTime.textContent = '00:00';
+    setPendingImage(file);
+    showAudioHint('Immagine pronta. Ora puoi scrivere un messaggio e inviare tutto insieme.');
+    dom.userInput.focus();
   } catch (err) {
-    removeLIPULoadingMessage();
-
     const readableError = getReadableError(err);
-
     console.error('[handleImageMessage] errore completo:', err);
     console.error('[handleImageMessage] errore leggibile:', readableError);
-
-    showAudioHint(readableError || 'Errore analisi immagine');
-  } finally {
-    disableComposer(false);
-    dom.userInput.focus();
+    showAudioHint(readableError || 'Errore selezione immagine');
   }
 }
 
 export function bindEvents() {
+  updatePendingImageUI();
+  clearFacePreviewUI();
+
   dom.recordBtn.addEventListener('click', async () => {
     if (!state.isRecording) {
       await startRecording();

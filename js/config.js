@@ -1,7 +1,5 @@
 export const WORKER_BASE_URL = 'https://crimson-firefly-cf7f.montefortefrancesco50.workers.dev';
 
-export const ELEVENLABS_API_KEY = "sk_55b4a8f4877874db16e8e4812fdc141cf00a7e4aadaab79d";
-export const VOICE_ID = "3nl8Zsm1cUwx1jH59GZo";
 
 export const MAX_CONVERSATION_HISTORY_MESSAGES = 500;
 
@@ -14,15 +12,16 @@ export const STORAGE_KEYS = {
   sessionSummary: 'lipu_session_summary',
   intermediateSummary: 'lipu_intermediate_summary',
   pinnedSummary: 'lipu_pinned_summary',
-  conversationHistory: 'lipu_conversation_history',
-  lastLipuImageAt: 'lipu_last_image_at'
+  conversationHistory: 'lipu_conversation_history'
 };
+
 
 export const DEFAULT_REPLY_MODE = 'audio';
 export const DEFAULT_PROFILE_ID = 'tommi';
 
-export const LIPU_FACE_REFERENCE_URL = './assets/lipu-face-reference.jpg';
-export const LIPU_IMAGE_REPLY_ENABLED = true;
-export const LIPU_IMAGE_REPLY_CHANCE = 1;
-export const LIPU_IMAGE_REPLY_MIN_TURNS = 0;
-export const LIPU_IMAGE_REPLY_MIN_INTERVAL_MS = 0
+export const CLAUDE_MAIN_MODEL = 'claude-sonnet-4-6';
+export const CLAUDE_SUMMARY_MODEL = 'claude-haiku-4-5-20251001';
+export const CLAUDE_MAIN_TEMPERATURE = 0.85;
+export const CLAUDE_FAST_MODEL = 'claude-haiku-4-5-20251001';
+export const CLAUDE_FAST_TEMPERATURE = 0.5;
+export const CLAUDE_SUMMARY_TEMPERATURE = 0.2;

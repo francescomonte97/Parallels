@@ -26,15 +26,23 @@ export function openSettingsModal() {
 
   dom.settingsModal.classList.remove('hidden');
   dom.settingsModal.setAttribute('aria-hidden', 'false');
+  dom.settingsModal.removeAttribute('inert');
   document.body.classList.add('modal-open');
 }
 
 export function closeSettingsModal() {
   if (!dom.settingsModal) return;
 
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+
   dom.settingsModal.classList.add('hidden');
   dom.settingsModal.setAttribute('aria-hidden', 'true');
+  dom.settingsModal.setAttribute('inert', '');
   document.body.classList.remove('modal-open');
+
+  dom.settingsTrigger?.focus();
 }
 
 function confirmProfileChange() {

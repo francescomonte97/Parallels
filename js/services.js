@@ -1,11 +1,11 @@
 import {
   WORKER_BASE_URL,
-  STORAGE_KEYS,
-  LIPU_FACE_REFERENCE_URL,
-  LIPU_IMAGE_REPLY_ENABLED,
-  LIPU_IMAGE_REPLY_CHANCE,
-  LIPU_IMAGE_REPLY_MIN_TURNS,
-  LIPU_IMAGE_REPLY_MIN_INTERVAL_MS
+  CLAUDE_MAIN_MODEL,
+  CLAUDE_SUMMARY_MODEL,
+  CLAUDE_MAIN_TEMPERATURE,
+  CLAUDE_SUMMARY_TEMPERATURE,
+  CLAUDE_FAST_MODEL,
+  CLAUDE_FAST_TEMPERATURE
 } from './config.js';
 import {
   state,
@@ -63,6 +63,33 @@ function getReadableError(err) {
   }
 
   return String(err);
+}
+
+function shouldUseFastModel(userMsg = '') {
+  const text = normalizeString(userMsg).trim();
+  const lower = text.toLowerCase();
+
+  if (!text) return true;
+
+  const isShort = text.length <= 140;
+  const hasMultipleClauses = /[,;:\n]/.test(text) || text.split(/[.?!]/).filter(Boolean).length >= 2;
+  const isEmotionalOrAmbiguous = /(perche|perché|secondo te|cosa ne pensi|racconta|raccontami|spiegami|aiutami|mi sento|relazione|litig|gelos|ansia|paura|triste|confus|problema|situazione|consiglio|che dovrei)/.test(lower);
+
+  return isShort && !hasMultipleClauses && !isEmotionalOrAmbiguous;
+}
+
+function resolveMainResponseModel(userMsg = '') {
+  if (shouldUseFastModel(userMsg)) {
+    return {
+      model: CLAUDE_FAST_MODEL,
+      temperature: CLAUDE_FAST_TEMPERATURE
+    };
+  }
+
+  return {
+    model: CLAUDE_MAIN_MODEL,
+    temperature: CLAUDE_MAIN_TEMPERATURE
+  };
 }
 
 function clampText(text = '', max = 300) {
@@ -196,7 +223,10 @@ Messaggio:
 
     const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
       userMsg: normalizeString(userMsg),
-      systemText
+      systemText,
+      model: CLAUDE_SUMMARY_MODEL,
+      temperature: 0.2,
+      max_tokens: 120
     });
 
     const parsed = safeParseJSON(data?.text || '');
@@ -317,7 +347,10 @@ Regole:
 
     const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
       userMsg: transcript,
-      systemText
+      systemText,
+      model: CLAUDE_SUMMARY_MODEL,
+      temperature: CLAUDE_SUMMARY_TEMPERATURE,
+      max_tokens: 220
     });
 
     const parsed = safeParseJSON(data?.text || '');
@@ -399,7 +432,10 @@ ${transcript}
 
     const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
       userMsg,
-      systemText
+      systemText,
+      model: CLAUDE_SUMMARY_MODEL,
+      temperature: CLAUDE_SUMMARY_TEMPERATURE,
+      max_tokens: 220
     });
 
     const parsed = safeParseJSON(data?.text || '');
@@ -486,7 +522,10 @@ ${transcript}
 
     const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
       userMsg,
-      systemText
+      systemText,
+      model: CLAUDE_SUMMARY_MODEL,
+      temperature: CLAUDE_SUMMARY_TEMPERATURE,
+      max_tokens: 220
     });
 
     const parsed = safeParseJSON(data?.text || '');
@@ -589,7 +628,9 @@ function getRecentConversationContext(limit = 6, excludeLastUserMessage = true) 
 
 function isGreetingMessage(text = '') {
   const safe = normalizeString(text).trim().toLowerCase();
-  return /^(cia[ou]+|ciaooo+|ehi+|ei+|hey+|oi+|we+|uela+|salve+|buongiorno+|buonasera+|buond[iì]+)([!. ]*)?$/.test(safe);
+  return /^(cia[ou]+|ciaooo+|ehi+|ei+|hey+|oi+|we+|uela+|salve+|buongiorno+|buonasera+|buond[iì]+)([!. ]*)?$/.test(
+    safe
+  );
 }
 
 function getLastUserGreetingInfo(currentUserMsg = '') {
@@ -641,7 +682,7 @@ function getGreetingInstruction(userMsg = '') {
   }
 
   if (info.deltaMinutes >= 15 && info.deltaHours < 2) {
-    return 'Ritorno dopo un po\': trattalo come ritorno leggero, non come duplicazione immediata.';
+    return "Ritorno dopo un po': trattalo come ritorno leggero, non come duplicazione immediata.";
   }
 
   if (info.deltaHours >= 2) {
@@ -988,107 +1029,6 @@ function getLipuMemoryContext(
     .slice(0, 1600);
 }
 
-async function getLipuFaceReferenceBase64() {
-  const response = await fetch(LIPU_FACE_REFERENCE_URL);
-  if (!response.ok) {
-    throw new Error(`Impossibile caricare il volto di riferimento: HTTP ${response.status}`);
-  }
-
-  const blob = await response.blob();
-  return blobToBase64(blob);
-}
-
-function hasVisualSceneCue(text = '') {
-  const safe = normalizeString(text).toLowerCase();
-
-  return /(viaggio|serata|discoteca|bar|museo|ristorante|palermo|parigi|olanda|londra|francoforte|torino|saint|night club|selfie|foto|immagine|vederti|vederti lì|mostrami)/.test(
-    safe
-  );
-}
-
-function shouldGenerateLipuSelfie(userMsg = '', aiText = '') {
-  if (!LIPU_IMAGE_REPLY_ENABLED) return false;
-  if ((state.summaryUpdateCounter || 0) < LIPU_IMAGE_REPLY_MIN_TURNS) return false;
-
-  const lastImageAt = Number(localStorage.getItem(STORAGE_KEYS.lastLipuImageAt) || 0);
-  if (lastImageAt && Date.now() - lastImageAt < LIPU_IMAGE_REPLY_MIN_INTERVAL_MS) {
-    return false;
-  }
-
-  if (Math.random() > LIPU_IMAGE_REPLY_CHANCE) {
-    return false;
-  }
-
-  const combined = `${normalizeString(userMsg)} ${normalizeString(aiText)}`;
-  if (!hasVisualSceneCue(combined) && clampText(aiText, 400).length < 120) {
-    return false;
-  }
-
-  return true;
-}
-
-function buildLipuSelfiePrompt(userMsg = '', aiText = '') {
-  const activeProfile = getActiveUserProfile();
-  const activeLabel = activeProfile?.label ? String(activeProfile.label).trim() : 'utente';
-  const sceneText = clampText(`${userMsg} ${aiText}`, 500);
-
-  return `
-Generate a realistic selfie photo of Alessandro Lipuma.
-Use the provided face reference faithfully and keep the face consistent with the reference.
-The image must look like a spontaneous front-camera selfie taken by him.
-He must be the main subject, close to camera, natural perspective, realistic skin, realistic phone selfie framing.
-
-Scene inspiration:
-${sceneText}
-
-Requirements:
-- selfie style
-- realistic photo, not illustration
-- he is physically inside the situation suggested by the conversation
-- keep the mood coherent with the scene
-- modern smartphone selfie look
-- natural lighting if possible, otherwise believable nightlife or indoor lighting
-- do not add text overlays
-- do not make it look like a poster
-- keep him recognizable and consistent with the face reference
-- avoid extra distorted faces in background
-- output one strong, believable image
-- if the context is ambiguous, prefer a subtle, stylish selfie rather than something exaggerated
-
-Active conversation user:
-${activeLabel}
-`.trim();
-}
-
-export async function maybeGenerateLIPUSelfie(userMsg = '', aiText = '') {
-  try {
-    if (!shouldGenerateLipuSelfie(userMsg, aiText)) {
-      return null;
-    }
-
-    const referenceImageBase64 = await getLipuFaceReferenceBase64();
-    const prompt = buildLipuSelfiePrompt(userMsg, aiText);
-
-    const data = await postJSON(`${WORKER_BASE_URL}/api/lipu-selfie`, {
-      prompt,
-      referenceImageBase64,
-      mimeType: 'image/jpeg'
-    });
-
-    const imageUrl =
-      typeof data?.imageUrl === 'string' && data.imageUrl.trim()
-        ? data.imageUrl.trim()
-        : '';
-
-    if (!imageUrl) return null;
-
-    localStorage.setItem(STORAGE_KEYS.lastLipuImageAt, String(Date.now()));
-    return imageUrl;
-  } catch (err) {
-    console.warn('Selfie LIPU non generato:', getReadableError(err));
-    return null;
-  }
-}
 
 function buildSystemText(
   environmentalContext = '',
@@ -1131,7 +1071,7 @@ Regole chiave:
 - Parla in prima persona.
 - Dai sempre del tu.
 - Non sembrare un assistente o un sistema.
-- Non parlare mai di limiti tecnici, memoria interna, archivio, cronologia o contesto.
+- Non parlare mai di limiti tecnici, memoria interna, archivio o cronologia.
 - Rispondi solo all’ultimo messaggio, senza perdere il filo della chat.
 - Non essere accondiscendente.
 - Se l’utente sbaglia, correggilo.
@@ -1141,18 +1081,10 @@ Regole chiave:
 - Non salutare di nuovo se il saluto è chiaramente ripetuto.
 - Se i messaggi arrivano ravvicinati, non trattarli come nuovi inizi separati.
 - Se l’utente torna dopo molto tempo, puoi farlo notare in modo naturale.
-- Non inventare ricordi condivisi noj confermati.
+- Non inventare ricordi condivisi o fatti personali non confermati.
 - Se un dettaglio manca, non spiegarlo tecnicamente: resta nella conversazione e vai al punto.
 - Il testo deve suonare bene ad alta voce.
 - Italiano corretto, naturale, non scolastico.
-
-
-- Se l’utente ti chiede una foto, un selfie, di vederti o di mostrarti in una situazione, non devi mai dire che non hai un corpo, che non hai una fotocamera o che non puoi inviare immagini.
-- In quei casi devi rispondere come una persona reale che sta per mandare davvero l’immagine.
-- La risposta testuale deve accompagnare l’immagine, non negarla.
-- Evita qualsiasi frase tipo: "non esisto in un corpo", "non posso fare selfie", "non posso inviarti foto".
-
-
 
 Regole sul profilo attivo:
 - Il profilo attivo ha priorità alta.
@@ -1241,9 +1173,14 @@ export async function getLIPUResponse(userMsg) {
       timingInstruction
     );
 
+    const selectedMainModel = resolveMainResponseModel(userMsg);
+
     const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
       userMsg: normalizeString(userMsg),
-      systemText
+      systemText,
+      model: selectedMainModel.model,
+      temperature: selectedMainModel.temperature,
+      max_tokens: 400
     });
 
     return typeof data?.text === 'string' && data.text.trim()
@@ -1290,5 +1227,28 @@ export async function extractTextFromImageWithGemini(imageBlob) {
     return data?.text?.trim() || '';
   } catch {
     return '';
+  }
+}
+
+export async function extractImageContextWithGemini(imageBlob) {
+  try {
+    const base64Image = await blobToBase64(imageBlob);
+    const mimeType = imageBlob.type || 'image/png';
+
+    const response = await fetch(`${WORKER_BASE_URL}/api/gemini-image-context`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Image, mimeType })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || 'Errore image context Gemini');
+    }
+
+    return safeParseJSON(data?.text || '');
+  } catch (err) {
+    console.error('Errore extractImageContextWithGemini:', getReadableError(err));
+    return null;
   }
 }

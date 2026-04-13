@@ -346,13 +346,14 @@ body {
 .composer-center {
   flex: 1;
   min-width: 0;
-  height: 56px;
+  min-height: 56px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--line);
   display: flex;
   align-items: center;
-  padding: 0 14px;
+  gap: 10px;
+  padding: 10px 14px;
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
 }
@@ -369,6 +370,121 @@ body {
 
 .text-input::placeholder {
   color: var(--muted);
+}
+
+.pending-image-chip {
+  max-width: 150px;
+  min-width: 0;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 6px 8px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+}
+
+.pending-image-preview {
+  display: block;
+  flex-shrink: 0;
+}
+
+.pending-image-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-image-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.image-preview-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.image-preview-container.hidden {
+  display: none;
+}
+
+.image-preview-wrap {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.20);
+  flex-shrink: 0;
+}
+
+.image-preview {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.face-count-badge {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #eff6ff;
+  background: rgba(5, 11, 24, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.20);
+}
+
+.face-count-badge.hidden {
+  display: none;
+}
+
+.face-crops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.face-crops::-webkit-scrollbar {
+  height: 4px;
+}
+
+.face-crops::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.face-crop-item {
+  flex-shrink: 0;
+}
+
+.face-crop-image {
+  display: block;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+.face-crop-label {
+  text-align: center;
 }
 
 .recording-ui {
@@ -537,7 +653,27 @@ body {
   }
 
   .composer-center {
+    min-height: 54px;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .pending-image-chip {
+    max-width: 120px;
+  }
+
+  .image-preview-wrap {
+    width: 54px;
     height: 54px;
+  }
+
+  .face-count-badge {
+    font-size: 10px;
+  }
+
+  .face-crop-image {
+    width: 46px !important;
+    height: 46px !important;
   }
 }
 
