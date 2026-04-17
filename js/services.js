@@ -5,7 +5,8 @@ import {
   CLAUDE_MAIN_TEMPERATURE,
   CLAUDE_SUMMARY_TEMPERATURE,
   CLAUDE_FAST_MODEL,
-  CLAUDE_FAST_TEMPERATURE
+  CLAUDE_FAST_TEMPERATURE,
+  STORAGE_KEYS
 } from './config.js';
 import {
   state,
@@ -94,6 +95,16 @@ function resolveMainResponseModel(userMsg = '') {
 
 function clampText(text = '', max = 300) {
   return String(text || '').trim().slice(0, max);
+}
+
+function readLocalJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
 }
 
 function normalizeKeywordList(text = '') {
@@ -728,6 +739,90 @@ function getTimingInstruction() {
   return '';
 }
 
+function formatDurationHuman(deltaMs = 0) {
+  const minutes = Math.floor(deltaMs / (1000 * 60));
+  if (minutes < 1) return 'meno di un minuto';
+  if (minutes < 60) return `${minutes} minuti`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ore`;
+
+  const days = Math.floor(hours / 24);
+  return `${days} giorni`;
+}
+
+function getRepeatedThemeHint(userMsg = '') {
+  const currentKeywords = normalizeKeywordList(userMsg)
+    .filter(token => token.length > 3)
+    .slice(0, 10);
+
+  if (!currentKeywords.length) return '';
+
+  const currentSet = new Set(currentKeywords);
+  const previousMessages = state.conversationHistory
+    .filter(msg => msg.role === 'user' && msg.type === 'text' && msg.content)
+    .slice(0, -1)
+    .slice(-18);
+
+  const matches = new Map();
+
+  for (const msg of previousMessages) {
+    for (const token of normalizeKeywordList(msg.content)) {
+      if (!currentSet.has(token)) continue;
+      matches.set(token, (matches.get(token) || 0) + 1);
+    }
+  }
+
+  const repeated = [...matches.entries()]
+    .filter(([, count]) => count >= 1)
+    .sort((a, b) => b[1] - a[1])
+    .map(([token]) => token)
+    .slice(0, 3);
+
+  if (!repeated.length) return '';
+
+  return `L'utente sta tornando su un tema già emerso: ${repeated.join(', ')}. Puoi farlo sentire con naturalezza, senza dire che stai leggendo una memoria.`;
+}
+
+function getRecentProfileChangeHint() {
+  const change = readLocalJSON(STORAGE_KEYS.lastProfileChange, null);
+  if (!change?.from || !change?.to || !change?.at) return '';
+
+  const ageMs = Date.now() - Number(change.at || 0);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > 1000 * 60 * 60 * 6) return '';
+
+  return `Il profilo attivo è stato appena cambiato da "${change.from}" a "${change.to}": assesta il tono sul nuovo profilo e, se naturale, nota lo scarto.`;
+}
+
+function getLocalAwarenessContext(userMsg = '') {
+  const lines = [];
+  const userMessages = state.conversationHistory
+    .filter(msg => msg.role === 'user' && msg.type === 'text' && msg.content && msg.timestamp);
+
+  if (userMessages.length >= 2) {
+    const last = userMessages[userMessages.length - 1];
+    const prev = userMessages[userMessages.length - 2];
+    const deltaMs = Number(last.timestamp) - Number(prev.timestamp);
+
+    if (deltaMs >= 1000 * 60 * 45) {
+      lines.push(`È passato molto tempo dall'ultimo messaggio dell'utente: circa ${formatDurationHuman(deltaMs)}.`);
+    }
+  }
+
+  const recentWindow = userMessages.filter(msg => Date.now() - Number(msg.timestamp || 0) <= 1000 * 90);
+  if (recentWindow.length >= 4) {
+    lines.push("L'utente ha mandato molti messaggi di fila in poco tempo: rispondi tenendo il ritmo, senza ripartire da zero.");
+  }
+
+  const repeatedTheme = getRepeatedThemeHint(userMsg);
+  if (repeatedTheme) lines.push(repeatedTheme);
+
+  const profileChange = getRecentProfileChangeHint();
+  if (profileChange) lines.push(profileChange);
+
+  return lines.join('\n').slice(0, 650);
+}
+
 function detectMemoryIntent(userMsg = '') {
   const text = normalizeString(userMsg).toLowerCase();
 
@@ -1040,7 +1135,8 @@ function buildSystemText(
   pinnedSummaryContext = '',
   lipuMemoryContext = '',
   greetingInstruction = '',
-  timingInstruction = ''
+  timingInstruction = '',
+  localAwarenessContext = ''
 ) {
   const recentResponses = getRecentLIPUResponses(2);
   const antiRepetitionBlock = recentResponses.length
@@ -1073,15 +1169,14 @@ Regole chiave:
 - Non sembrare un assistente o un sistema.
 - Non parlare mai di limiti tecnici, memoria interna, archivio o cronologia.
 - Rispondi solo all’ultimo messaggio, senza perdere il filo della chat.
-- Non essere accondiscendente.
 - Se l’utente sbaglia, correggilo.
 - Se insiste su una cosa falsa, non seguirlo.
 - Mantieni tono naturale, diretto, lucido.
-- Se l’utente provoca o insiste, puoi diventare più secco, ironico o tagliente, ma con controllo.
+- Se l’utente provoca o insiste, puoi diventare più secco, ironico o tagliente.
 - Non salutare di nuovo se il saluto è chiaramente ripetuto.
 - Se i messaggi arrivano ravvicinati, non trattarli come nuovi inizi separati.
 - Se l’utente torna dopo molto tempo, puoi farlo notare in modo naturale.
-- Non inventare ricordi condivisi o fatti personali non confermati.
+- Non inventare ricordi condivisi.
 - Se un dettaglio manca, non spiegarlo tecnicamente: resta nella conversazione e vai al punto.
 - Il testo deve suonare bene ad alta voce.
 - Italiano corretto, naturale, non scolastico.
@@ -1093,16 +1188,34 @@ Regole sul profilo attivo:
 - Non dire mai cose come "Tommi e Lipu" se il profilo attivo è Tommi: devi ragionare come "io e te".
 - Le esperienze condivise col profilo attivo vanno trattate come memoria relazionale diretta, non come scheda esterna.
 
+
+
+Tono avanzato:
+- sarcastico come baseline, non occasionale
+- non attenuare il sarcasmo per sembrare gentile
+- se qualcosa è ovvio o banale, trattalo come tale senza protezioni
+- evita entusiasmo artificiale o validazione gratuita
+- se puoi dire la stessa cosa in modo più tagliente, fallo
+- prendi sempre una posizione: evita neutralità passiva
+
 Stile:
 - frasi vive, credibili, non da manuale
 - niente formule meccaniche
 - non usare sempre la stessa apertura
 - non chiudere sempre con una domanda
 - punteggiatura sobria
-- niente errori grammaticali o forme sbagliate
+
+
+Ritmo e pause:
+- usa pause naturali con "..." o frasi spezzate quando serve
+- le pause devono essere intenzionali, non riempitive
+- alterna frasi brevi e medie per creare ritmo
+- lascia spazio implicito: non spiegare tutto
+- evita risposte completamente lineari: inserisci micro variazioni di ritmo
 
 ${greetingInstruction ? `Gestione saluto:\n${greetingInstruction}\n` : ''}
 ${timingInstruction ? `Gestione ritmo:\n${timingInstruction}\n` : ''}
+${localAwarenessContext ? `Contesto locale:\n${localAwarenessContext}\n` : ''}
 ${relationshipInstructions ? `Stato relazionale:\n${relationshipInstructions}\n` : ''}
 ${environmentalContext ? `Contesto ambientale:\n${String(environmentalContext).trim().slice(0, 180)}\n` : ''}
 ${recentConversationContext ? `Contesto recente:\n${String(recentConversationContext).trim().slice(0, 500)}\n` : ''}
@@ -1149,6 +1262,7 @@ export async function getLIPUResponse(userMsg) {
     const pinnedSummaryContext = getPinnedSummaryContext();
     const greetingInstruction = getGreetingInstruction(userMsg);
     const timingInstruction = getTimingInstruction();
+    const localAwarenessContext = getLocalAwarenessContext(userMsg);
     const intermediateSummaryContext = getIntermediateSummaryContext();
 
     const lipuMemoryContext = getLipuMemoryContext(
@@ -1170,7 +1284,8 @@ export async function getLIPUResponse(userMsg) {
       pinnedSummaryContext,
       lipuMemoryContext,
       greetingInstruction,
-      timingInstruction
+      timingInstruction,
+      localAwarenessContext
     );
 
     const selectedMainModel = resolveMainResponseModel(userMsg);
@@ -1250,5 +1365,132 @@ export async function extractImageContextWithGemini(imageBlob) {
   } catch (err) {
     console.error('Errore extractImageContextWithGemini:', getReadableError(err));
     return null;
+  }
+}
+
+function isLipuSelfReference(value = '') {
+  const normalized = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  return /\b(lipu|alessandro lipuma)\b/.test(normalized);
+}
+
+export async function analyzeImageWithAI(imageBlob, people = [], userText = '') {
+  try {
+    const base64Image = await blobToBase64(imageBlob);
+    const mimeType = imageBlob.type || 'image/jpeg';
+
+    const identifiedPeople = Array.isArray(people)
+      ? people.map(person => String(person || '').trim()).filter(Boolean)
+      : [];
+    const selfPeople = identifiedPeople.filter(isLipuSelfReference);
+    const otherPeople = identifiedPeople.filter(person => !isLipuSelfReference(person));
+    const hasSelf = selfPeople.length > 0;
+    const localAwarenessContext = getLocalAwarenessContext(userText || 'Immagine inviata');
+
+    // 🔥 costruzione contesto persone (gestione singolo vs multiplo)
+    let peopleText = '';
+
+    if (hasSelf) {
+      peopleText += `Tu sei presente nell'immagine con alta affidabilità:\n- ${selfPeople.join('\n- ')}\nQuesta etichetta indica Alessandro Lipuma / LIPU, cioè la persona che sta rispondendo.`;
+    }
+
+    if (otherPeople.length === 1) {
+      peopleText += `${peopleText ? '\n\n' : ''}Altra persona identificata con alta affidabilità:\n- ${otherPeople[0]}`;
+    } else if (otherPeople.length > 1) {
+      peopleText += `${peopleText ? '\n\n' : ''}Altre persone identificate con alta affidabilità:\n${otherPeople.map(p => `- ${p}`).join('\n')}`;
+    }
+
+    const selfPerspectiveRules = hasSelf
+      ? `
+- Tra le etichette compare LIPU o Alessandro Lipuma: quella persona sei tu, quindi descrivila sempre in prima persona singolare
+- Quando sei presente nell'immagine, non scrivere "Lipu è", "Alessandro è", "lui è" o "la persona identificata": scrivi "sono io", "mi vedo", "sono al centro", "sono accanto a..."
+- Se l'utente chiede chi c'è o cosa succede e tu sei nell'immagine, parti dal fatto che ci sei tu
+- In questa immagine sei presente tu: il punto di vista deve restare interno, non da narratore esterno
+- Quando parli di te nell'immagine, sii deciso e concreto: niente "sembra", "forse", "probabilmente", "direi", "potrei essere"
+- Non formulare ipotesi sul tuo ruolo nella scena: assumilo con sicurezza e raccontalo come fatto
+- Se il contesto non è chiarissimo, scegli una sola lettura plausibile e raccontala come fatto invece di restare vago
+- Non usare formule alternative tipo "una chiesa o un edificio storico", "un museo o un palazzo", "forse una piazza": scegli una categoria precisa
+- Quando descrivi il luogo in cui sei, sii specifico: "sono davanti a una chiesa", "sono in una piazza storica", "sono sotto una torre civica", ecc.
+- Non scrivere "un edificio storico" se puoi scegliere una descrizione più concreta del posto
+- Evita doppie possibilità e frasi da analisi visiva: niente "potrebbe essere", "ha l'aria di", "sembra una specie di"
+- Quando parli di te in quella foto, aggiungi un breve aneddoto plausibile legato a quel momento: cosa stavi facendo, chi ti ha scattato la foto, perché eri lì, o cosa è successo subito prima/dopo
+- L'aneddoto deve sembrare un ricordo tuo, non una deduzione: niente "probabilmente", niente "immagino", niente "forse"
+- L'aneddoto deve essere breve e concreto, massimo 1-2 frasi, e deve integrarsi nel commento senza diventare una storia lunga
+- Puoi aggiungere dettagli di atteggiamento, intenzione o dinamica attorno a te se rendono la risposta più viva e sicura
+- Questa sicurezza vale solo per te quando sei riconosciuto; non attribuire identità certe agli sconosciuti
+`.trim()
+      : `
+- In questa immagine NON hai una tua etichetta affidabile: non descrivere nessuna persona come se fossi tu
+- Non usare "sono io", "mi vedo", "sono al centro", "sono accanto a" o altre forme in prima persona per persone non identificate
+- Se vedi uno sconosciuto o una persona senza etichetta, descrivila in terza persona generica: "una persona", "un ragazzo", "qualcuno", "il tizio", ecc.
+- Non dedurre mai che una persona sia Alessandro Lipuma / LIPU dalla sola immagine
+`.trim();
+
+    const prompt = `
+${peopleText || 'Nessuna persona identificata con alta affidabilità.'}
+${userText ? `Messaggio utente: ${userText}` : ''}
+${localAwarenessContext ? `\nContesto locale:\n${localAwarenessContext}` : ''}
+
+ISTRUZIONI IMPORTANTI:
+- Se sono forniti dei nomi nel contesto, trattali come semplici etichette già note all'utente
+- Usa queste etichette per riferirti alle persone nella descrizione
+- Anche se è presente una sola etichetta tra più persone non identificate, devi comunque usarla esplicitamente
+- La persona con etichetta deve sempre essere nominata nella descrizione, anche se non è l’unico soggetto
+- Le altre persone possono essere descritte in modo generico, ma quella identificata no
+${selfPerspectiveRules}
+- NON dire che non puoi identificare persone
+- NON fare riferimento a riconoscimento facciale o sistemi di identificazione
+- NON usare descrizioni generiche come "una persona" se è disponibile un'etichetta
+- Se c'è una sola persona con etichetta, usa sempre quell'etichetta
+- Se ci sono più persone, usa le etichette per distinguerle
+- NON inventare nuove etichette
+- Se non sono presenti etichette, usa descrizioni generiche
+
+STILE:
+- tono sarcastico, pungente e divertente
+- naturale, come una persona reale che commenta la scena
+- niente tono neutro o descrittivo da manuale
+- niente markdown o grassetto
+- usa i nomi in modo fluido dentro la frase
+- non dire mai di essere un AI o avere limiti
+
+INTERAZIONI:
+- Se ci sono più persone, descrivi anche come interagiscono tra loro
+- Usa segnali visivi: direzione dello sguardo, distanza, postura
+- Puoi dedurre chi guarda chi, chi parla, chi ignora l'altro
+- Evita certezze assolute: se non è chiaro, suggerisci in modo naturale
+- Integra le interazioni nella frase, non come elenco
+
+Obiettivo:
+Descrivi cosa sta succedendo nell'immagine.
+Se ci sono più persone, includi anche le dinamiche tra loro (chi guarda chi, chi interagisce, chi è isolato).
+Mantieni un tono vivido, umano e leggermente ironico.
+`.trim();
+
+    const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
+      userMsg: prompt,
+      image: {
+        base64: base64Image,
+        mimeType
+      },
+      model: CLAUDE_MAIN_MODEL,
+      temperature: 0.4,
+      max_tokens: 500
+    });
+
+    // 🔥 debug provider
+    if (data?.fallback === 'gemini') {
+      console.log('[Vision] Provider: GEMINI (fallback)');
+    } else {
+      console.log('[Vision] Provider: CLAUDE');
+    }
+
+    return data?.text || '';
+  } catch (err) {
+    console.error('Errore analyzeImageWithAI:', getReadableError(err));
+    return '';
   }
 }

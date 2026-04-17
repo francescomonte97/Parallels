@@ -143,7 +143,7 @@ function createCustomAudioPlayer(audioSource) {
 
   const audio = document.createElement('audio');
   audio.src = audioSource;
-  audio.preload = 'metadata';
+  audio.preload = 'auto';
 
   const playBtn = document.createElement('button');
   playBtn.className = 'audio-play-btn';

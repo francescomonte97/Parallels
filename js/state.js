@@ -344,8 +344,8 @@ export async function exportConversationData() {
   );
 
   return {
-    version: unsignedEnvelope.version,
     sha256,
+    version: unsignedEnvelope.version,
     encoding: unsignedEnvelope.encoding,
     timestamp: unsignedEnvelope.timestamp,
     payload: unsignedEnvelope.payload

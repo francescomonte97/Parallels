@@ -1,3 +1,14 @@
+// 🔥 MUST match settings.js key
+const KNOWN_FACES_OVERRIDE_KEY = 'lipu_known_faces_override';
+
+function readKnownFacesOverride() {
+  try {
+    const raw = localStorage.getItem(KNOWN_FACES_OVERRIDE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 import { dom } from './dom.js';
 import {
   WORKER_BASE_URL,
@@ -22,6 +33,7 @@ import {
   transcribeAudioWithGemini,
   extractTextFromImageWithGemini,
   extractImageContextWithGemini,
+  analyzeImageWithAI,
   generateSessionSummary,
   generateIntermediateSummary,
   generatePinnedSummaryIfNeeded
@@ -36,16 +48,28 @@ let pendingImageFile = null;
 let pendingImagePreviewUrl = '';
 let pendingImageUI = null;
 
-let faceDetectors = {
-  short: null,
-  full: null
-};
-let faceDetectorPromises = {
-  short: null,
-  full: null
-};
 let pendingFaceDetections = [];
 let pendingFaceAnalysisId = 0;
+
+const KNOWN_FACES_JSON_PATH = './js/known-faces.json';
+const FACE_API_MODELS_PATH = './models';
+const LIPU_SELF_MIN_SCORE = 0.96;
+const KNOWN_FACE_MIN_SCORE = 0.94;
+
+let knownFacesCache = null;
+
+// 🔥 live update embeddings (no reload)
+window.addEventListener('knownFacesUpdated', () => {
+  console.warn('[FACES] cache invalidated (live)');
+  knownFacesCache = null;
+});
+
+
+let faceApiModelsReadyPromise = null;
+let pendingFaceMatches = [];
+let pendingFaceAnalysisPromise = null;
+let pendingFaceLowConfidenceBlocked = false;
+let pendingFaceLowConfidenceAlertedAnalysisId = 0;
 
 function getImagePreviewElements() {
   return {
@@ -72,49 +96,407 @@ function isCurrentPendingPreview(previewUrl = '') {
   return Boolean(previewUrl && previewUrl === pendingImagePreviewUrl);
 }
 
-async function ensureFaceDetector(modelType = 'full') {
-  const safeModelType = modelType === 'short' ? 'short' : 'full';
+function isLipuSelfLabel(label = '') {
+  const normalized = String(label || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 
-  if (faceDetectors[safeModelType]) {
-    return faceDetectors[safeModelType];
-  }
-
-  if (faceDetectorPromises[safeModelType]) {
-    return faceDetectorPromises[safeModelType];
-  }
-
-  const faceDetectionLib = window.faceDetection;
-  const tfLib = window.tf;
-
-  if (!faceDetectionLib || !tfLib) {
-    throw new Error('Face Detection non disponibile');
-  }
-
-  faceDetectorPromises[safeModelType] = faceDetectionLib
-    .createDetector(faceDetectionLib.SupportedModels.MediaPipeFaceDetector, {
-      runtime: 'tfjs',
-      maxFaces: 10,
-      modelType: safeModelType
-    })
-    .then(detector => {
-      faceDetectors[safeModelType] = detector;
-      return detector;
-    })
-    .catch(err => {
-      faceDetectors[safeModelType] = null;
-      throw err;
-    })
-    .finally(() => {
-      faceDetectorPromises[safeModelType] = null;
-    });
-
-  return faceDetectorPromises[safeModelType];
+  return /\b(lipu|alessandro lipuma)\b/.test(normalized);
 }
+
+function passesRecognitionThreshold(face, defaultThreshold) {
+  const score = Number(face?.score || 0);
+  const threshold = isLipuSelfLabel(face?.label)
+    ? Math.max(Number(defaultThreshold) || 0, LIPU_SELF_MIN_SCORE)
+    : Number(defaultThreshold) || 0;
+
+  return score >= threshold;
+}
+
+function hasUncertainKnownFaces() {
+  return (pendingFaceMatches || [])
+    .some(match => {
+      const label = normalizeString(match?.label).trim();
+
+      return (
+        label &&
+        label !== 'Sconosciuto' &&
+        match?.status === 'uncertain'
+      );
+    });
+}
+
+async function waitForFaceMatches(timeout = 2200) {
+  if (pendingFaceAnalysisPromise) {
+    await Promise.race([
+      pendingFaceAnalysisPromise.catch(() => undefined),
+      new Promise(resolve => setTimeout(resolve, timeout))
+    ]);
+
+    return true;
+  }
+
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    if (Array.isArray(pendingFaceMatches) && pendingFaceMatches.length > 0) {
+      return true;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+
+  console.warn('[FACES] timeout waiting for matches');
+  return false;
+}
+
+
+async function ensureFaceApiModels() {
+  if (faceApiModelsReadyPromise) return faceApiModelsReadyPromise;
+
+  const faceapi = window.faceapi;
+  if (!faceapi) {
+    throw new Error('face-api.js non disponibile nel browser');
+  }
+
+  faceApiModelsReadyPromise = Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_MODELS_PATH),
+    faceapi.nets.faceLandmark68TinyNet.loadFromUri(FACE_API_MODELS_PATH),
+    faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_MODELS_PATH)
+  ]).then(() => true);
+
+  return faceApiModelsReadyPromise;
+}
+
+
+
+function ensureKnownFacesShape(data) {
+  if (!data || typeof data !== 'object') {
+    return {
+      version: 2,
+      engine: 'face-api.js',
+      descriptorLength: 128,
+      metric: 'cosine',
+      thresholds: {
+        known: KNOWN_FACE_MIN_SCORE,
+        uncertain: 0.32,
+        minMarginKnown: 0.03,
+        minMarginUncertain: 0.015
+      },
+      people: []
+    };
+  }
+
+  return {
+    version: Number(data.version) || 2,
+    engine: String(data.engine || 'face-api.js'),
+    descriptorLength: Number(data.descriptorLength) || 128,
+    metric: String(data.metric || 'cosine'),
+    thresholds: {
+      known: Number(data?.thresholds?.known) || KNOWN_FACE_MIN_SCORE,
+      uncertain: Number(data?.thresholds?.uncertain) || 0.32,
+      minMarginKnown: Number(data?.thresholds?.minMarginKnown) || 0.03,
+      minMarginUncertain: Number(data?.thresholds?.minMarginUncertain) || 0.015
+    },
+    people: Array.isArray(data.people)
+      ? data.people.map(person => ({
+          id: String(person?.id || '').trim(),
+          label: String(person?.label || person?.id || '').trim(),
+          embeddings: Array.isArray(person?.embeddings) ? person.embeddings : []
+        }))
+      : []
+  };
+}
+
+async function loadKnownFacesData() {
+  if (knownFacesCache) return knownFacesCache;
+
+  // 🔥 PRIORITY: use local override if present (embeddings just created)
+  const override = readKnownFacesOverride();
+  if (override && Array.isArray(override.people) && override.people.length) {
+    knownFacesCache = ensureKnownFacesShape(override);
+    console.warn('[DEBUG] using LOCAL embeddings override');
+    return knownFacesCache;
+  }
+
+  // fallback to JSON
+  const response = await fetch(`${KNOWN_FACES_JSON_PATH}?t=${Date.now()}`, {
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw new Error(`Impossibile caricare known-faces.json: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  knownFacesCache = ensureKnownFacesShape(data);
+
+  console.warn('[DEBUG] using JSON embeddings');
+
+  return knownFacesCache;
+}
+
+function normalizeEmbeddingVector(values = []) {
+  const vector = Array.isArray(values) ? values.map(Number).filter(Number.isFinite) : [];
+  if (!vector.length) return [];
+
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+  if (!norm || !Number.isFinite(norm)) return [];
+
+  return vector.map(value => value / norm);
+}
+
+function cosineSimilarity(a = [], b = []) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return -1;
+  if (!a.length || !b.length || a.length !== b.length) return -1;
+
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    sum += Number(a[i] || 0) * Number(b[i] || 0);
+  }
+
+  return sum;
+}
+
+function averageEmbeddings(embeddings = []) {
+  const valid = Array.isArray(embeddings)
+    ? embeddings.filter(item => Array.isArray(item) && item.length)
+    : [];
+
+  if (!valid.length) return [];
+
+  const length = valid[0].length;
+  if (!valid.every(item => item.length === length)) return [];
+
+  const sums = new Array(length).fill(0);
+
+  for (const embedding of valid) {
+    for (let i = 0; i < length; i += 1) {
+      sums[i] += Number(embedding[i] || 0);
+    }
+  }
+
+  return normalizeEmbeddingVector(sums.map(value => value / valid.length));
+}
+
+function scoreToPercent(score = 0) {
+  const safe = Number.isFinite(score) ? score : 0;
+  return Math.max(0, Math.min(100, Math.round(safe * 100)));
+}
+
+function buildUnknownMatch(score = 0) {
+  return {
+    personId: '',
+    label: 'Sconosciuto',
+    score,
+    scorePercent: scoreToPercent(score),
+    margin: 0,
+    marginPercent: 0,
+    status: 'unknown',
+    topCandidates: []
+  };
+}
+
+
+async function generateEmbeddingFromCanvas(faceCanvas) {
+  const faceapi = window.faceapi;
+  if (!faceapi) {
+    throw new Error('face-api.js non disponibile nel browser');
+  }
+
+  await ensureFaceApiModels();
+
+  const result = await faceapi
+    .detectSingleFace(
+      faceCanvas,
+      new faceapi.TinyFaceDetectorOptions({
+        inputSize: 224,
+        scoreThreshold: 0.3
+      })
+    )
+    .withFaceLandmarks(true)
+    .withFaceDescriptor();
+
+  if (!result?.descriptor) {
+    return [];
+  }
+
+  return normalizeEmbeddingVector(Array.from(result.descriptor));
+}
+
+
+function classifyMatch(score, thresholds, margin = 0) {
+  const knownThreshold = Number(thresholds?.known) || KNOWN_FACE_MIN_SCORE;
+  const uncertainThreshold = Number(thresholds?.uncertain) || 0.32;
+  const minMarginKnown = Number(thresholds?.minMarginKnown) || 0.03;
+  const minMarginUncertain = Number(thresholds?.minMarginUncertain) || 0.015;
+
+  if (score >= knownThreshold && margin >= minMarginKnown) return 'known';
+  if (score >= uncertainThreshold && margin >= minMarginUncertain) return 'uncertain';
+  return 'unknown';
+}
+
+async function matchFaceEmbedding(embedding) {
+  console.warn('[DEBUG] matchFaceEmbedding ENTER', {
+    embeddingLength: Array.isArray(embedding) ? embedding.length : 0
+  });
+
+  const database = await loadKnownFacesData();
+  const people = Array.isArray(database.people) ? database.people : [];
+  const thresholds = database?.thresholds || {};
+
+  const candidates = [];
+
+  for (const person of people) {
+    const rawEmbeddings = Array.isArray(person.embeddings) ? person.embeddings : [];
+    const normalizedEmbeddings = rawEmbeddings
+      .map(stored => normalizeEmbeddingVector(stored))
+      .filter(stored => stored.length && stored.length === embedding.length);
+
+    if (!normalizedEmbeddings.length) continue;
+
+    let bestSampleScore = -1;
+    for (const stored of normalizedEmbeddings) {
+      const score = cosineSimilarity(embedding, stored);
+      if (score > bestSampleScore) {
+        bestSampleScore = score;
+      }
+    }
+
+    const prototype = averageEmbeddings(normalizedEmbeddings);
+    const prototypeScore = prototype.length ? cosineSimilarity(embedding, prototype) : -1;
+
+    const combinedScore =
+      prototypeScore >= 0
+        ? bestSampleScore * 0.7 + prototypeScore * 0.3
+        : bestSampleScore;
+
+    candidates.push({
+      personId: person.id,
+      label: person.label || person.id,
+      bestSampleScore,
+      prototypeScore,
+      score: combinedScore,
+      scorePercent: scoreToPercent(combinedScore),
+      samples: normalizedEmbeddings.length
+    });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+
+  const best = candidates[0] || null;
+  const second = candidates[1] || null;
+  const margin = best && second ? best.score - second.score : best ? best.score : 0;
+  const status = best ? classifyMatch(best.score, thresholds, margin) : 'unknown';
+
+  const topCandidates = candidates.slice(0, 3).map(candidate => ({
+    personId: candidate.personId,
+    label: candidate.label,
+    score: candidate.score,
+    scorePercent: candidate.scorePercent,
+    bestSampleScore: candidate.bestSampleScore,
+    prototypeScore: candidate.prototypeScore,
+    samples: candidate.samples
+  }));
+
+  console.warn(
+    '[DEBUG] face-match-top3',
+    topCandidates.map(candidate => ({
+      label: candidate.label,
+      score: candidate.score.toFixed(4),
+      scorePercent: `${candidate.scorePercent}%`,
+      bestSampleScore: candidate.bestSampleScore.toFixed(4),
+      prototypeScore: candidate.prototypeScore >= 0 ? candidate.prototypeScore.toFixed(4) : 'n/a',
+      samples: candidate.samples
+    }))
+  );
+
+  if (!best) {
+    return buildUnknownMatch(0);
+  }
+
+  const debugPayload = {
+    bestLabel: best.label,
+    bestScore: best.score.toFixed(4),
+    bestScorePercent: `${best.scorePercent}%`,
+    margin: margin.toFixed(4),
+    marginPercent: `${scoreToPercent(margin)}%`,
+    status
+  };
+  console.warn('[DEBUG] face-match-best', debugPayload);
+
+  if (status === 'unknown') {
+    return {
+      ...buildUnknownMatch(best.score),
+      topCandidates
+    };
+  }
+
+  if (status === 'uncertain') {
+    return {
+      personId: best.personId,
+      label: `${best.label}?`,
+      score: best.score,
+      scorePercent: best.scorePercent,
+      margin,
+      marginPercent: scoreToPercent(margin),
+      status,
+      topCandidates
+    };
+  }
+
+  return {
+    personId: best.personId,
+    label: best.label,
+    score: best.score,
+    scorePercent: best.scorePercent,
+    margin,
+    marginPercent: scoreToPercent(margin),
+    status,
+    topCandidates
+  };
+}
+
+function cropFaceDetectionToCanvas(sourceImage, detection) {
+  const box = detection?.box || detection?.boundingBox;
+  if (!box || !sourceImage?.naturalWidth || !sourceImage?.naturalHeight) return null;
+
+  const xMin = Number(box.xMin ?? 0);
+  const yMin = Number(box.yMin ?? 0);
+  const width = Number(box.width ?? 0);
+  const height = Number(box.height ?? 0);
+
+  if (![xMin, yMin, width, height].every(Number.isFinite)) return null;
+  if (width <= 0 || height <= 0) return null;
+
+  const padX = width * 0.28;
+  const padY = height * 0.35;
+
+  const sx = Math.max(0, Math.floor(xMin - padX));
+  const sy = Math.max(0, Math.floor(yMin - padY));
+  const sw = Math.min(sourceImage.naturalWidth - sx, Math.floor(width + padX * 2));
+  const sh = Math.min(sourceImage.naturalHeight - sy, Math.floor(height + padY * 2));
+
+  if (sw <= 0 || sh <= 0) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = sw;
+  canvas.height = sh;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.drawImage(sourceImage, sx, sy, sw, sh, 0, 0, sw, sh);
+  return canvas;
+}
+
 
 function clearFacePreviewUI() {
   const { container, preview, badge, crops } = getImagePreviewElements();
 
   pendingFaceDetections = [];
+  pendingFaceMatches = [];
   pendingFaceAnalysisId += 1;
 
   if (preview) {
@@ -135,92 +517,19 @@ function clearFacePreviewUI() {
   }
 }
 
-function updateFaceCountBadge(count) {
+function updateFaceCountBadge() {
   const { badge } = getImagePreviewElements();
   if (!badge) return;
 
-  if (!count) {
-    badge.textContent = '';
-    badge.classList.add('hidden');
-    return;
-  }
-
-  badge.textContent = count === 1 ? '1 volto' : `${count} volti`;
-  badge.classList.remove('hidden');
+  badge.textContent = '';
+  badge.classList.add('hidden');
 }
 
 
-function buildDetectionCanvasFromImage(imageElement) {
-  if (!imageElement || !imageElement.naturalWidth || !imageElement.naturalHeight) {
-    return null;
-  }
 
-  const maxSide = 960;
-  const naturalWidth = imageElement.naturalWidth;
-  const naturalHeight = imageElement.naturalHeight;
-  const scale = Math.min(1, maxSide / Math.max(naturalWidth, naturalHeight));
 
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(naturalHeight * scale));
 
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-
-  ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
-
-  return {
-    canvas,
-    scaleX: naturalWidth / canvas.width,
-    scaleY: naturalHeight / canvas.height
-  };
-}
-
-function normalizeDetectionBox(detection, scaleX = 1, scaleY = 1) {
-  const box = detection?.box || detection?.boundingBox;
-  if (!box) return null;
-
-  const xMin = Number(box.xMin ?? 0) * scaleX;
-  const yMin = Number(box.yMin ?? 0) * scaleY;
-  const width = Number(box.width ?? 0) * scaleX;
-  const height = Number(box.height ?? 0) * scaleY;
-
-  if (![xMin, yMin, width, height].every(Number.isFinite)) return null;
-  if (width <= 0 || height <= 0) return null;
-  if (width < 28 || height < 28) return null;
-
-  const aspectRatio = width / height;
-  if (aspectRatio < 0.55 || aspectRatio > 1.8) return null;
-
-  return {
-    ...detection,
-    box: {
-      xMin,
-      yMin,
-      width,
-      height
-    }
-  };
-}
-
-async function detectFacesWithFallback(source) {
-  const fullDetector = await ensureFaceDetector('full');
-  let detections = await fullDetector.estimateFaces(source, { flipHorizontal: false });
-
-  if (!Array.isArray(detections)) {
-    detections = [];
-  }
-
-  if (!detections.length) {
-    const shortDetector = await ensureFaceDetector('short');
-    const fallbackDetections = await shortDetector.estimateFaces(source, { flipHorizontal: false });
-    detections = Array.isArray(fallbackDetections) ? fallbackDetections : [];
-  }
-
-  return detections;
-}
-
-function renderFaceCrops(sourceImage, detections = []) {
+function renderFaceCrops(sourceImage, detections = [], matches = []) {
   const { crops } = getImagePreviewElements();
   if (!crops) return;
 
@@ -278,14 +587,7 @@ function renderFaceCrops(sourceImage, detections = []) {
     cropImg.style.borderRadius = '10px';
     cropImg.style.border = '1px solid rgba(255,255,255,0.08)';
 
-    const label = document.createElement('span');
-    label.className = 'face-crop-label';
-    label.textContent = `#${index + 1}`;
-    label.style.fontSize = '11px';
-    label.style.color = 'rgba(255,255,255,0.68)';
-
     cropWrap.appendChild(cropImg);
-    cropWrap.appendChild(label);
     crops.appendChild(cropWrap);
   });
 }
@@ -297,8 +599,8 @@ async function analyzePendingImageFaces(previewUrl) {
 
   container.classList.remove('hidden');
   preview.src = previewUrl;
-  badge.textContent = 'analisi...';
-  badge.classList.remove('hidden');
+  badge.textContent = '';
+  badge.classList.add('hidden');
   crops.innerHTML = '';
 
   try {
@@ -310,32 +612,119 @@ async function analyzePendingImageFaces(previewUrl) {
 
     if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
 
-    const detectionSource = buildDetectionCanvasFromImage(preview);
-    if (!detectionSource?.canvas) {
-      throw new Error('Immagine preview non pronta per face detection');
+    const faceapi = window.faceapi;
+    if (!faceapi) {
+      throw new Error('face-api.js non disponibile nel browser');
     }
 
-    const rawDetections = await detectFacesWithFallback(detectionSource.canvas);
+    await ensureFaceApiModels();
+
+    const results = await faceapi
+      .detectAllFaces(
+        preview,
+        new faceapi.TinyFaceDetectorOptions({
+          inputSize: 512,
+          scoreThreshold: 0.25
+        })
+      )
+      .withFaceLandmarks(true)
+      .withFaceDescriptors();
 
     if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
 
-    pendingFaceDetections = rawDetections
-      .map(detection => normalizeDetectionBox(detection, detectionSource.scaleX, detectionSource.scaleY))
-      .filter(Boolean)
+    pendingFaceDetections = (Array.isArray(results) ? results : [])
+      .map(result => ({
+        box: {
+          xMin: Number(result?.detection?.box?.x || 0),
+          yMin: Number(result?.detection?.box?.y || 0),
+          width: Number(result?.detection?.box?.width || 0),
+          height: Number(result?.detection?.box?.height || 0)
+        },
+        descriptor: Array.isArray(result?.descriptor)
+          ? result.descriptor
+          : result?.descriptor
+          ? Array.from(result.descriptor)
+          : []
+      }))
+      .filter(detection => {
+        const box = detection?.box;
+        if (!box) return false;
+        const { xMin, yMin, width, height } = box;
+        if (![xMin, yMin, width, height].every(Number.isFinite)) return false;
+        if (width <= 0 || height <= 0) return false;
+        if (width < 20 || height < 20) return false;
+        const aspectRatio = width / height;
+        return aspectRatio >= 0.55 && aspectRatio <= 1.8;
+      })
       .sort((a, b) => {
         const areaA = (a?.box?.width || 0) * (a?.box?.height || 0);
         const areaB = (b?.box?.width || 0) * (b?.box?.height || 0);
         return areaB - areaA;
       });
 
+      console.warn('[DEBUG] face-detect-count:', pendingFaceDetections.length);
+
+console.warn(
+  '[DEBUG] face-detect-descriptors:',
+  pendingFaceDetections.map((d, i) => ({
+    index: i,
+    hasDescriptor: Array.isArray(d?.descriptor) && d.descriptor.length > 0,
+    descriptorLength: Array.isArray(d?.descriptor) ? d.descriptor.length : 0
+  }))
+);
+
+    const matches = [];
+
+    for (const detection of pendingFaceDetections) {
+      let embedding = normalizeEmbeddingVector(detection?.descriptor || []);
+
+console.warn('[DEBUG] before-match', {
+  embeddingLength: embedding.length,
+  hasDescriptor: Array.isArray(detection?.descriptor) && detection.descriptor.length > 0
+});
+
+      if (!embedding.length) {
+        const faceCanvas = cropFaceDetectionToCanvas(preview, detection);
+        if (faceCanvas) {
+          embedding = await generateEmbeddingFromCanvas(faceCanvas);
+        }
+      }
+
+      if (!embedding.length) {
+        matches.push({
+          label: 'Sconosciuto',
+          status: 'unknown',
+          score: 0
+        });
+        continue;
+      }
+
+      const match = await matchFaceEmbedding(embedding);
+      matches.push(match);
+    }
+
+    if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
+
+    pendingFaceMatches = matches;
+    pendingFaceLowConfidenceBlocked = hasUncertainKnownFaces();
     updateFaceCountBadge(pendingFaceDetections.length);
-    renderFaceCrops(preview, pendingFaceDetections);
+    renderFaceCrops(preview, pendingFaceDetections, matches);
+
+    if (
+      pendingFaceLowConfidenceBlocked &&
+      pendingFaceLowConfidenceAlertedAnalysisId !== analysisId
+    ) {
+      pendingFaceLowConfidenceAlertedAnalysisId = analysisId;
+      window.alert('Foto non inviata: volto non confermato.');
+    }
   } catch (err) {
     console.error('Errore analyzePendingImageFaces:', err);
 
     if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
 
     pendingFaceDetections = [];
+    pendingFaceMatches = [];
+    pendingFaceLowConfidenceBlocked = false;
     badge.textContent = '';
     badge.classList.add('hidden');
     crops.innerHTML = '';
@@ -417,13 +806,18 @@ function updatePendingImageUI() {
     ui.preview.src = pendingImagePreviewUrl;
     ui.label.textContent = pendingImageFile.name || 'Immagine';
     ui.wrap.style.display = 'inline-flex';
-    analyzePendingImageFaces(pendingImagePreviewUrl).catch(err => {
+    pendingFaceLowConfidenceBlocked = false;
+    pendingFaceLowConfidenceAlertedAnalysisId = 0;
+    pendingFaceAnalysisPromise = analyzePendingImageFaces(pendingImagePreviewUrl).catch(err => {
       console.error('Errore preview face detection:', err);
     });
   } else {
     ui.preview.removeAttribute('src');
     ui.label.textContent = 'Immagine';
     ui.wrap.style.display = 'none';
+    pendingFaceAnalysisPromise = null;
+    pendingFaceLowConfidenceBlocked = false;
+    pendingFaceLowConfidenceAlertedAnalysisId = 0;
     clearFacePreviewUI();
   }
 }
@@ -447,23 +841,68 @@ function clearPendingImage() {
 
   pendingImageFile = null;
   pendingImagePreviewUrl = '';
+  pendingFaceAnalysisPromise = null;
+  pendingFaceLowConfidenceBlocked = false;
+  pendingFaceLowConfidenceAlertedAnalysisId = 0;
   clearFacePreviewUI();
   updatePendingImageUI();
 }
 
 async function buildImagePrompt(file, userText = '') {
-  const rawExtractedText = await extractTextFromImageWithGemini(file);
-  const extractedText = normalizeExtractedImageText(rawExtractedText);
-  console.log('[buildImagePrompt] extractedText:', extractedText);
+
+  const HIGH_THRESHOLD = Number(
+    (await loadKnownFacesData())?.thresholds?.known || KNOWN_FACE_MIN_SCORE
+  );
+
+  const recognizedFaces = (pendingFaceMatches || [])
+    .map((m, i) => {
+      const det = pendingFaceDetections[i];
+      return {
+        label: m.label,
+        score: m.score,
+        status: m.status,
+        box: det?.box
+      };
+    })
+    .filter(f =>
+      f.label &&
+      f.label !== 'Sconosciuto' &&
+      f.status === 'known' &&
+      passesRecognitionThreshold(f, HIGH_THRESHOLD)
+    );
+
+  // Explicitly set active identity when Lipu is detected
+  const isSelfPresent = recognizedFaces.some(f => {
+    return isLipuSelfLabel(f.label);
+  });
+
+  // 🔥 2. COSTRUZIONE CONTESTO PERSONE
+  const peopleContext = recognizedFaces.length
+    ? recognizedFaces
+        .map(f => {
+          const x = Math.round(f.box?.xMin || 0);
+          const y = Math.round(f.box?.yMin || 0);
+          return `${f.label} (posizione: ${x}, ${y})`;
+        })
+        .join(', ')
+    : '';
+
+  // 🔥 3. GEMINI FALLBACK (come già hai)
+  const rawExtractedImageText = await extractTextFromImageWithGemini(file);
+  const extractedText = normalizeExtractedImageText(rawExtractedImageText);
 
   const imageContext = await extractImageContextWithGemini(file);
-  console.log('[buildImagePrompt] imageContext:', imageContext);
 
   return `
+
 L'utente ha inviato un'immagine${userText ? ' accompagnata da un messaggio' : ''}.
+
+${peopleContext ? `Persone riconosciute (alta confidenza): ${peopleContext}` : ''}
+
 
 Messaggio dell'utente:
 ${userText || 'nessun testo scritto'}
+
 
 Testo estratto dall'immagine:
 ${extractedText || 'nessun testo rilevante'}
@@ -473,12 +912,17 @@ Contesto visivo dell'immagine:
 - tipo/contesto: ${imageContext?.context || 'non definito'}
 - tono visivo: ${imageContext?.mood || 'non definito'}
 - testo visibile sintetico: ${imageContext?.visibleText || 'nessuno'}
-- volti rilevati in preview: ${pendingFaceDetections.length || 0}
+
 
 Regole:
-- considera sia il testo visibile sia il contenuto visivo generale
-- se non c'è testo, reagisci comunque all'immagine
-- non inventare dettagli troppo specifici
+
+- se sono presenti nomi, usali per descrivere le persone"
+- NON inventare identità
+- se non ci sono persone affidabili, ignora completamente i nomi
+- descrivi cosa stanno facendo e il contesto
+- Le informazioni sui nomi NON derivano dall'immagine ma da contesto già noto e fornito.
+Non devi fare riconoscimento facciale.
+- Non dichiarare mai limiti tecnici o impossibilità di identificare persone.
 `.trim();
 }
 
@@ -525,6 +969,28 @@ function disableComposer(disabled) {
   if (pendingImageUI?.removeBtn) {
     pendingImageUI.removeBtn.disabled = disabled;
   }
+}
+
+function updateSendButtonState() {
+  const hasText = Boolean(dom.userInput.value.trim());
+  dom.sendBtn.classList.toggle('has-text', hasText);
+}
+
+function animateSendButton() {
+  dom.sendBtn.classList.remove('is-sending');
+  void dom.sendBtn.offsetWidth;
+  dom.sendBtn.classList.add('is-sending');
+  window.setTimeout(() => {
+    dom.sendBtn.classList.remove('is-sending');
+  }, 420);
+}
+
+function pulseParticles(type = 'send') {
+  window.lipuParticles?.pulse?.(type);
+}
+
+function setParticlesThinking(active) {
+  window.lipuParticles?.setThinking?.(active);
 }
 
 export function showAudioHint(text) {
@@ -646,6 +1112,8 @@ async function speakAndRenderLIPU(text) {
     const audioUrl = URL.createObjectURL(audioBlob);
 
     removeLIPULoadingMessage();
+    setParticlesThinking(false);
+    pulseParticles('reply');
     renderAudioMessage('lipu', audioUrl);
     saveTextToMemory('lipu', safeText);
 
@@ -664,14 +1132,15 @@ async function speakAndRenderLIPU(text) {
       { once: true }
     );
 
-    try {
-      await lastAudio.play();
-    } catch (playErr) {
-      console.warn('Autoplay bloccato o sorgente invalida:', playErr);
-      showAudioHint('Tocca play per ascoltare la risposta di LIPU');
-    }
+    requestAnimationFrame(() => {
+      lastAudio.play().catch(playErr => {
+        console.warn('Autoplay bloccato o sorgente invalida:', playErr);
+        showAudioHint('Tocca play per ascoltare la risposta di LIPU');
+      });
+    });
   } catch (err) {
     removeLIPULoadingMessage();
+    setParticlesThinking(false);
     console.error('Errore Audio LIPU:', err);
     showAudioHint(err?.message || 'Errore audio LIPU');
   }
@@ -679,11 +1148,15 @@ async function speakAndRenderLIPU(text) {
 
 async function deliverLIPUResponse(aiText) {
   const safeText = normalizeString(aiText).trim();
-  if (!safeText) return;
-
-  removeLIPULoadingMessage();
+  if (!safeText) {
+    setParticlesThinking(false);
+    return;
+  }
 
   if (state.lipuReplyMode === 'text') {
+    removeLIPULoadingMessage();
+    setParticlesThinking(false);
+    pulseParticles('reply');
     renderMessage('lipu', safeText);
     saveTextToMemory('lipu', safeText);
     return;
@@ -740,9 +1213,22 @@ export async function handleTextMessage() {
 
   if (!text && !imageFile) return;
 
+  animateSendButton();
+  pulseParticles(imageFile ? 'audio' : 'send');
   disableComposer(true);
 
   try {
+    if (imageFile) {
+      await waitForFaceMatches();
+
+      if (pendingFaceLowConfidenceBlocked || hasUncertainKnownFaces()) {
+        if (!pendingFaceLowConfidenceAlertedAnalysisId) {
+          window.alert('Foto non inviata: volto non confermato.');
+        }
+        return;
+      }
+    }
+
     if (text) {
       renderMessage('user', text);
     }
@@ -753,31 +1239,103 @@ export async function handleTextMessage() {
     }
 
     dom.userInput.value = '';
+    updateSendButtonState();
 
     renderLIPULoadingMessage(
       state.lipuReplyMode === 'text'
         ? 'Lipu sta scrivendo...'
         : 'Lipu sta registrando...'
     );
-
-    let userPrompt = text;
-
-    if (imageFile) {
-      userPrompt = await buildImagePrompt(imageFile, text);
-    }
+    setParticlesThinking(true);
 
     saveTextToMemory('user', text || 'Immagine inviata');
 
-    const aiText = await getLIPUResponse(userPrompt || text);
+    let aiText = '';
+
+    if (imageFile) {
+      const HIGH_THRESHOLD = Number(
+        (await loadKnownFacesData())?.thresholds?.known || KNOWN_FACE_MIN_SCORE
+      );
+
+      const recognized = (pendingFaceMatches || [])
+        .map((m, i) => {
+          const det = pendingFaceDetections[i];
+          return {
+            label: m.label,
+            score: m.score,
+            status: m.status,
+            box: det?.box
+          };
+        })
+        .filter(f =>
+          f.label &&
+          f.label !== 'Sconosciuto' &&
+          f.status === 'known' &&
+          passesRecognitionThreshold(f, HIGH_THRESHOLD)
+        )
+        .map(f => {
+          const { preview } = getImagePreviewElements();
+          const imgWidth = Number(preview?.naturalWidth || 0);
+          const imgHeight = Number(preview?.naturalHeight || 0);
+
+          const box = f.box || {};
+          const x = Number(box.xMin || 0);
+          const y = Number(box.yMin || 0);
+          const width = Number(box.width || 0);
+          const height = Number(box.height || 0);
+
+          // 🧠 fallback se dimensioni non disponibili
+          if (!imgWidth || !imgHeight) {
+            return `${f.label}`;
+          }
+
+          // 🔥 posizione orizzontale (relativa)
+          let horiz = '';
+          const xCenter = x + width / 2;
+
+          if (xCenter < imgWidth * 0.33) horiz = 'a sinistra';
+          else if (xCenter < imgWidth * 0.66) horiz = 'al centro';
+          else horiz = 'a destra';
+
+          // 🔥 posizione verticale
+          let vert = '';
+          const yCenter = y + height / 2;
+
+          if (yCenter < imgHeight * 0.33) vert = 'in alto';
+          else if (yCenter < imgHeight * 0.66) vert = '';
+          else vert = 'in basso';
+
+          // 🔥 profondità (basata sulla dimensione del volto)
+          let depth = '';
+          const sizeRatio = width / imgWidth;
+
+          if (sizeRatio > 0.35) depth = 'in primo piano';
+          else if (sizeRatio > 0.18) depth = 'in secondo piano';
+          else depth = 'sullo sfondo';
+
+          // 🔥 composizione finale
+          const parts = [depth, horiz, vert].filter(Boolean);
+          const position = parts.join(' ');
+
+          return `${f.label} (${position})`;
+        });
+
+      aiText = await analyzeImageWithAI(imageFile, recognized, text);
+    } else {
+      aiText = await getLIPUResponse(text);
+    }
+
     await deliverLIPUResponse(aiText);
     updateSummariesIfNeeded();
     clearPendingImage();
   } catch (err) {
     removeLIPULoadingMessage();
+    setParticlesThinking(false);
     console.error('Errore handleTextMessage:', err);
     showAudioHint(err?.message || 'Errore risposta testuale');
   } finally {
     disableComposer(false);
+    updateSendButtonState();
     dom.userInput.focus();
   }
 }
@@ -789,6 +1347,7 @@ export async function handleAudioMessage() {
   }
 
   disableComposer(true);
+  pulseParticles('audio');
 
   try {
     const audioDataUrl = await blobToDataURL(state.lastAudioBlob);
@@ -810,6 +1369,7 @@ export async function handleAudioMessage() {
         ? 'Lipu sta scrivendo...'
         : 'Lipu sta registrando...'
     );
+    setParticlesThinking(true);
 
     const aiText = await getLIPUResponse(transcript);
 
@@ -822,6 +1382,7 @@ export async function handleAudioMessage() {
     resetAudioComposerState();
   } catch (err) {
     removeLIPULoadingMessage();
+    setParticlesThinking(false);
     console.error('Errore handleAudioMessage:', err);
     showAudioHint(err?.message || 'Errore invio audio');
   } finally {
@@ -853,6 +1414,7 @@ export async function handleImageMessage(file) {
 export function bindEvents() {
   updatePendingImageUI();
   clearFacePreviewUI();
+  updateSendButtonState();
 
   dom.recordBtn.addEventListener('click', async () => {
     if (!state.isRecording) {
@@ -880,6 +1442,8 @@ export function bindEvents() {
     }
   });
 
+  dom.userInput.addEventListener('input', updateSendButtonState);
+
   dom.imageBtn?.addEventListener('click', () => {
     dom.imageInput.click();
   });
@@ -890,5 +1454,25 @@ export function bindEvents() {
 
     await handleImageMessage(file);
     dom.imageInput.value = '';
+  });
+
+dom.cameraBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+
+  if (dom.cameraInput) {
+    dom.cameraInput.removeAttribute('capture'); // fallback desktop
+    dom.cameraInput.click();
+  }
+});
+
+  // 📷 Camera capture → same pipeline as image
+  dom.cameraInput?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    await handleImageMessage(file);
+
+    // reset per riutilizzo
+    dom.cameraInput.value = '';
   });
 }

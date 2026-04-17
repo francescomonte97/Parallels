@@ -12,11 +12,13 @@ export const STORAGE_KEYS = {
   sessionSummary: 'lipu_session_summary',
   intermediateSummary: 'lipu_intermediate_summary',
   pinnedSummary: 'lipu_pinned_summary',
-  conversationHistory: 'lipu_conversation_history'
+  conversationHistory: 'lipu_conversation_history',
+  lastProfileChange: 'lipu_last_profile_change',
+  particleTheme: 'lipu_particle_theme'
 };
 
 
-export const DEFAULT_REPLY_MODE = 'audio';
+export const DEFAULT_REPLY_MODE = 'text';
 export const DEFAULT_PROFILE_ID = 'tommi';
 
 export const CLAUDE_MAIN_MODEL = 'claude-sonnet-4-6';

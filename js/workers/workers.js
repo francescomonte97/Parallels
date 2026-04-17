@@ -146,6 +146,10 @@ async function handleClaude(request, env) {
   const temperature = normalizeTemperature(body?.temperature, 0.7);
   const maxTokens = normalizeMaxTokens(body?.max_tokens, 400);
 
+  const imageBase64 = body?.image?.base64 ? String(body.image.base64) : '';
+  const imageMime = body?.image?.mimeType ? String(body.image.mimeType) : 'image/jpeg';
+  const hasImage = Boolean(imageBase64);
+
   if (!env.ANTHROPIC_API_KEY) {
     return json({ error: 'ANTHROPIC_API_KEY mancante' }, 500);
   }
@@ -153,6 +157,23 @@ async function handleClaude(request, env) {
   if (!userMsg) {
     return json({ error: 'userMsg mancante' }, 400);
   }
+
+  const content = hasImage
+    ? [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: imageMime,
+            data: imageBase64
+          }
+        },
+        {
+          type: 'text',
+          text: userMsg
+        }
+      ]
+    : userMsg;
 
   const payload = {
     model,
@@ -162,7 +183,7 @@ async function handleClaude(request, env) {
     messages: [
       {
         role: 'user',
-        content: userMsg
+        content
       }
     ]
   };
@@ -180,6 +201,49 @@ async function handleClaude(request, env) {
   const raw = await upstream.text();
 
   if (!upstream.ok) {
+    // 🔥 Fallback Gemini Vision (solo se c'è immagine e API disponibile)
+    if (hasImage && env.GEMINI_API_KEY) {
+      try {
+        const geminiResp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: userMsg },
+                    {
+                      inlineData: {
+                        mimeType: imageMime,
+                        data: imageBase64
+                      }
+                    }
+                  ]
+                }
+              ]
+            })
+          }
+        );
+
+        const geminiRaw = await geminiResp.text();
+        let geminiData;
+        try {
+          geminiData = JSON.parse(geminiRaw);
+        } catch {
+          return json({ error: 'Fallback Gemini non valido', raw: geminiRaw }, 500);
+        }
+
+        return json({
+          text: extractGeminiText(geminiData),
+          fallback: 'gemini'
+        });
+      } catch (e) {
+        return json({ error: 'Fallback Gemini fallito' }, 500);
+      }
+    }
+
     return json(
       {
         error: raw || 'Errore Claude',

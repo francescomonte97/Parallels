@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="particles-js" class="particles-bg" aria-hidden="true"></div>
   <div class="bg-orb orb-1"></div>
   <div class="bg-orb orb-2"></div>
   <div class="bg-grid"></div>
@@ -22,16 +23,20 @@
         <div class="profile-text">
           <div class="name-row">
             <div class="name">Alessandro Lipuma</div>
-            <div class="ai-badge">∆</div>
+            <div class="ai-badge">PRO</div>
           </div>
           <div class="subtitle"></div>
         </div>
       </div>
 
-      <div class="status">
-        <span class="status-dot"></span>
-        <span>Online</span>
-      </div>
+      <button id="synapse-trigger" class="synapse-trigger" type="button" aria-label="Apri Sinapsi">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="6" cy="12" r="2.4" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="17.5" cy="6.5" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="18" cy="17.5" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M8.2 11 15.5 7.4M8.2 13.1l7.7 3.2M17.5 8.8l.3 6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </button>
     </header>
 
     <main id="chat-box" class="chat"></main>
@@ -42,6 +47,12 @@
           <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="m8 14 2.5-2.5L14 15l2-2 2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           <circle cx="9" cy="10" r="1.2" fill="currentColor"/>
+        </svg>
+      </button>
+      <button id="camera-btn" class="icon-btn" aria-label="Scatta foto">
+        <svg viewBox="0 0 24 24" fill="none" class="icon">
+          <path d="M4 7h3l2-2h6l2 2h3v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.8"/>
         </svg>
       </button>
 
@@ -65,10 +76,10 @@
 
         <div id="image-preview-container" class="image-preview-container hidden">
           <div class="image-preview-wrap">
-            <img id="image-preview" class="image-preview" />
+            <img id="image-preview" class="image-preview hidden" />
             <div id="face-count-badge" class="face-count-badge hidden"></div>
           </div>
-          <div id="face-crops" class="face-crops"></div>
+          <div id="face-crops" class="face-crops hidden"></div>
         </div>
 
         <div class="recording-ui" id="recording-ui">
@@ -97,6 +108,37 @@
         accept="image/*"
         hidden
       />
+      <input
+        id="camera-input"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+      />
+    </div>
+  </div>
+
+  <!-- MODALE SINAPSI -->
+  <div id="synapse-modal" class="settings-modal hidden" aria-hidden="true">
+    <div class="settings-backdrop" id="synapse-backdrop"></div>
+
+    <div class="settings-card synapse-card" role="dialog" aria-modal="true" aria-labelledby="synapse-title">
+      <div class="settings-header">
+        <h2 id="synapse-title" class="settings-title">Sinapsi</h2>
+        <button
+          id="synapse-close-btn"
+          class="settings-close-btn"
+          type="button"
+          aria-label="Chiudi Sinapsi"
+        ></button>
+      </div>
+
+      <div class="settings-body">
+        <p class="synapse-copy">
+          Integra Alessandro Lipuma in altre applicazioni di messaggistica e fallo partecipare ai tuoi gruppi.
+        </p>
+        <div class="synapse-coming-soon">Coming soon</div>
+      </div>
     </div>
   </div>
 
@@ -120,14 +162,32 @@
           <div class="settings-label">Formato risposta</div>
 
           <label class="settings-option">
+            <input type="radio" name="lipu-reply-mode" value="text" />
+            <span>Messaggio di testo</span>
+          </label>
+
+  <label class="settings-option">
             <input type="radio" name="lipu-reply-mode" value="audio" checked />
             <span>Messaggio vocale</span>
           </label>
 
-          <label class="settings-option">
-            <input type="radio" name="lipu-reply-mode" value="text" />
-            <span>Messaggio di testo</span>
-          </label>
+
+        </div>
+
+        <div class="settings-section particle-theme-section">
+          <div class="settings-label">Tema</div>
+          <div id="particle-theme-palette" class="particle-theme-palette" aria-label="Palette colore particles"></div>
+          <div class="particle-preset-actions">
+            <button id="particle-theme-save-btn" type="button" class="particle-preset-btn">Salva</button>
+            <button id="particle-theme-export-btn" type="button" class="particle-preset-btn">Esporta</button>
+            <button id="particle-theme-import-btn" type="button" class="particle-preset-btn">Importa</button>
+          </div>
+          <input
+            id="particle-theme-import-input"
+            type="file"
+            accept="application/json"
+            hidden
+          />
         </div>
 
         <div class="settings-section">
@@ -192,6 +252,74 @@
             hidden
           />
         </div>
+        <div class="settings-section">
+          <div class="settings-label">Face enrollment</div>
+
+          <label class="settings-subfield">
+            <span class="settings-subfield-label"></span>
+            <input
+              id="enroll-face-name-input"
+              type="text"
+              class="text-input"
+              placeholder="Inserisci nome della persona..."
+              autocomplete="off"
+            />
+          </label>
+
+          <div class="settings-helper-text">
+          </div>
+
+          <button id="enroll-face-generate-btn" type="button" class="settings-action-btn primary-action-btn">
+            Genera embeddings
+          </button>
+
+          <button id="enroll-face-export-btn" type="button" class="settings-action-btn">
+            <svg viewBox="0 0 24 24" fill="none" class="icon">
+              <path d="M12 3v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            Esporta embeddings
+          </button>
+          <button id="import-faces-btn" type="button" class="settings-action-btn">
+            <svg viewBox="0 0 24 24" fill="none" class="icon">
+              <path d="M12 21V9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="m17 14-5-5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M5 3h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            Importa embeddings
+          </button>
+          <input
+            id="import-faces-input"
+            type="file"
+            accept="application/json"
+            hidden
+          />
+          <input
+            id="enroll-face-input"
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+          />
+
+          <div id="enroll-face-status" class="settings-helper-text compact-status"></div>
+
+          <div id="enroll-face-progress-wrap" class="hidden">
+            <div class="settings-helper-text" id="enroll-face-progress-text"></div>
+            <div class="progress-track">
+              <div id="enroll-face-progress-bar" class="progress-bar"></div>
+            </div>
+          </div>
+
+          <div class="settings-subfield">
+            <span class="settings-subfield-label">Persone riconociute</span>
+            <div id="enroll-face-people-list"></div>
+          </div>
+
+          <div id="enroll-face-preview" class="enroll-face-preview"></div>
+          <div id="enroll-face-crops" class="enroll-face-crops"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -224,10 +352,11 @@
     </div>
   </div>
 
-</body>
+
 <!-- TensorFlow + Face Detection -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection"></script>
+
+<script defer src="./js/particles-bg.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <script type="module" src="./js/main.js"></script>
 </body>
 </html>
