@@ -26,6 +26,15 @@
     active: false
   };
 
+  const tilt = {
+    x: 0,
+    y: 0,
+    targetX: 0,
+    targetY: 0,
+    enabled: false,
+    requested: false
+  };
+
   let width = 0;
   let height = 0;
   let pixelRatio = 1;
@@ -34,6 +43,8 @@
   let scanning = false;
   let pulse = null;
   let theme = loadStoredTheme();
+  let mobileMode = false;
+  let orientationListenerAttached = false;
 
   function clampColorChannel(value, fallback = 255) {
     const number = Number(value);
@@ -83,10 +94,17 @@
     return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},`;
   }
 
+  function isMobileLike() {
+    return window.matchMedia?.('(max-width: 768px), (pointer: coarse)')?.matches || false;
+  }
+
   function getParticleCount() {
     const area = width * height;
-    const base = Math.round(area / 4200);
-    return Math.max(72, Math.min(190, base));
+    const divisor = mobileMode ? 7600 : 4200;
+    const base = Math.round(area / divisor);
+    return mobileMode
+      ? Math.max(42, Math.min(96, base))
+      : Math.max(72, Math.min(190, base));
   }
 
   function createParticle() {
@@ -111,18 +129,18 @@
 
   function createPulse(type = 'send') {
     const originMap = {
-      send: { x: width * 0.5, y: height * 0.92, strength: 1.45, color: rgbaPrefix(theme.accent) },
-      reply: { x: width * 0.24, y: height * 0.18, strength: 0.82, color: rgbaPrefix(theme.reply) },
-      audio: { x: width * 0.18, y: height * 0.88, strength: 1.08, color: rgbaPrefix(theme.audio) }
+      send: { x: width * 0.5, y: height * 0.92, strength: mobileMode ? 1.12 : 1.45, color: rgbaPrefix(theme.accent) },
+      reply: { x: width * 0.24, y: height * 0.18, strength: mobileMode ? 0.68 : 0.82, color: rgbaPrefix(theme.reply) },
+      audio: { x: width * 0.18, y: height * 0.88, strength: mobileMode ? 0.86 : 1.08, color: rgbaPrefix(theme.audio) }
     };
 
     const config = originMap[type] || originMap.send;
     pulse = {
       ...config,
       radius: 0,
-      maxRadius: Math.max(width, height) * 0.78,
+      maxRadius: Math.max(width, height) * (mobileMode ? 0.62 : 0.78),
       age: 0,
-      duration: type === 'reply' ? 54 : 64
+      duration: type === 'reply' ? (mobileMode ? 42 : 54) : (mobileMode ? 48 : 64)
     };
   }
 
@@ -159,7 +177,8 @@
     const rect = host.getBoundingClientRect();
     width = Math.max(1, Math.floor(rect.width));
     height = Math.max(1, Math.floor(rect.height));
-    pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    mobileMode = isMobileLike();
+    pixelRatio = Math.min(window.devicePixelRatio || 1, mobileMode ? 1.35 : 2);
 
     canvas.width = Math.floor(width * pixelRatio);
     canvas.height = Math.floor(height * pixelRatio);
@@ -205,17 +224,81 @@
     }
   }
 
+  function updateTilt() {
+    tilt.x += (tilt.targetX - tilt.x) * 0.055;
+    tilt.y += (tilt.targetY - tilt.y) * 0.055;
+  }
+
+  function drawParticleConnections(pulseAlpha, thinkingLineBoost) {
+    const maxDistance = thinking ? (mobileMode ? 110 : 138) : scanning ? (mobileMode ? 102 : 124) : (mobileMode ? 86 : 112);
+    const cellSize = maxDistance;
+    const grid = new Map();
+
+    for (let i = 0; i < particles.length; i += 1) {
+      const p = particles[i];
+      const cellX = Math.floor(p.x / cellSize);
+      const cellY = Math.floor(p.y / cellSize);
+      const key = `${cellX}:${cellY}`;
+      const bucket = grid.get(key);
+
+      if (bucket) {
+        bucket.push(i);
+      } else {
+        grid.set(key, [i]);
+      }
+    }
+
+    for (let i = 0; i < particles.length; i += 1) {
+      const a = particles[i];
+      const cellX = Math.floor(a.x / cellSize);
+      const cellY = Math.floor(a.y / cellSize);
+
+      for (let ox = -1; ox <= 1; ox += 1) {
+        for (let oy = -1; oy <= 1; oy += 1) {
+          const bucket = grid.get(`${cellX + ox}:${cellY + oy}`);
+          if (!bucket) continue;
+
+          for (const j of bucket) {
+            if (j <= i) continue;
+
+            const b = particles[j];
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance > maxDistance) continue;
+
+            const opacity = (1 - distance / maxDistance) * (0.16 + thinkingLineBoost + pulseAlpha * (mobileMode ? 0.22 : 0.34));
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.strokeStyle = rgba(theme.line, opacity);
+            ctx.lineWidth = thinking ? 0.86 : mobileMode ? 0.62 : 0.75;
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+
   function step() {
+    if (document.hidden) {
+      requestAnimationFrame(step);
+      return;
+    }
+
+    updateTilt();
     drawBackground();
     const pulseAlpha = drawPulse();
     const scanWave = scanning ? (0.5 + Math.sin(Date.now() / 150) * 0.5) : 0;
-    const thinkingBoost = thinking ? 1.32 : scanning ? 1.14 + scanWave * 0.12 : 1;
-    const thinkingLineBoost = thinking ? 0.10 : scanning ? 0.05 + scanWave * 0.08 : 0;
+    const thinkingBoost = thinking ? (mobileMode ? 1.18 : 1.32) : scanning ? (mobileMode ? 1.05 + scanWave * 0.08 : 1.14 + scanWave * 0.12) : 1;
+    const thinkingLineBoost = thinking ? (mobileMode ? 0.07 : 0.10) : scanning ? (mobileMode ? 0.035 + scanWave * 0.055 : 0.05 + scanWave * 0.08) : 0;
+    const tiltForce = mobileMode ? 0.18 : 0.08;
 
     for (const particle of particles) {
       particle.phase += 0.015;
-      particle.x += particle.vx * thinkingBoost + Math.cos(particle.phase) * (thinking ? 0.045 : 0.012);
-      particle.y += particle.vy * thinkingBoost + Math.sin(particle.phase) * (thinking ? 0.045 : 0.012);
+      particle.x += particle.vx * thinkingBoost + Math.cos(particle.phase) * (thinking ? 0.045 : 0.012) + tilt.x * tiltForce;
+      particle.y += particle.vy * thinkingBoost + Math.sin(particle.phase) * (thinking ? 0.045 : 0.012) + tilt.y * tiltForce;
 
       if (particle.x < -8) particle.x = width + 8;
       if (particle.x > width + 8) particle.x = -8;
@@ -226,10 +309,11 @@
         const dx = pointer.x - particle.x;
         const dy = pointer.y - particle.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
+        const pointerRadius = mobileMode ? 92 : 130;
 
-        if (distance < 130 && distance > 1) {
-          particle.x -= (dx / distance) * 0.14;
-          particle.y -= (dy / distance) * 0.14;
+        if (distance < pointerRadius && distance > 1) {
+          particle.x -= (dx / distance) * (mobileMode ? 0.08 : 0.14);
+          particle.y -= (dy / distance) * (mobileMode ? 0.08 : 0.14);
         }
       }
 
@@ -238,9 +322,10 @@
         const dy = particle.y - pulse.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
         const ringDistance = Math.abs(distance - pulse.radius);
+        const ringWidth = mobileMode ? 58 : 78;
 
-        if (ringDistance < 78 && distance > 1) {
-          const force = (1 - ringDistance / 78) * 0.72 * pulse.strength;
+        if (ringDistance < ringWidth && distance > 1) {
+          const force = (1 - ringDistance / ringWidth) * (mobileMode ? 0.48 : 0.72) * pulse.strength;
           particle.x += (dx / distance) * force;
           particle.y += (dy / distance) * force;
         }
@@ -254,30 +339,76 @@
       ctx.arc(a.x, a.y, a.size, 0, Math.PI * 2);
       ctx.fillStyle = rgba(theme.particle, clamp(a.alpha + pulseAlpha * 0.32 + (thinking ? 0.08 : 0) + (scanning ? scanWave * 0.10 : 0), 0, 0.82));
       ctx.fill();
-
-      for (let j = i + 1; j < particles.length; j += 1) {
-        const b = particles[j];
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        const maxDistance = thinking ? 138 : 112;
-        if (distance > maxDistance) continue;
-
-        const opacity = (1 - distance / maxDistance) * (0.18 + thinkingLineBoost + pulseAlpha * 0.34);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = rgba(theme.line, opacity);
-        ctx.lineWidth = thinking ? 0.9 : 0.75;
-        ctx.stroke();
-      }
     }
+
+    drawParticleConnections(pulseAlpha, thinkingLineBoost);
 
     requestAnimationFrame(step);
   }
 
+  function getOrientationAngle() {
+    const angle = window.screen?.orientation?.angle;
+    if (Number.isFinite(angle)) return angle;
+    return Number(window.orientation) || 0;
+  }
+
+  function handleDeviceOrientation(event) {
+    if (!mobileMode) return;
+
+    const gamma = Number(event.gamma);
+    const beta = Number(event.beta);
+    if (!Number.isFinite(gamma) || !Number.isFinite(beta)) return;
+
+    const x = clamp(gamma / 26, -1, 1);
+    const y = clamp(beta / 34, -1, 1);
+    const angle = getOrientationAngle();
+
+    if (angle === 90) {
+      tilt.targetX = y;
+      tilt.targetY = -x;
+    } else if (angle === -90 || angle === 270) {
+      tilt.targetX = -y;
+      tilt.targetY = x;
+    } else if (Math.abs(angle) === 180) {
+      tilt.targetX = -x;
+      tilt.targetY = -y;
+    } else {
+      tilt.targetX = x;
+      tilt.targetY = y;
+    }
+
+    tilt.enabled = true;
+  }
+
+  function attachOrientationListener() {
+    if (orientationListenerAttached || !('DeviceOrientationEvent' in window)) return;
+    window.addEventListener('deviceorientation', handleDeviceOrientation, { passive: true });
+    orientationListenerAttached = true;
+  }
+
+  async function requestTiltAccess() {
+    if (tilt.requested || !mobileMode || !('DeviceOrientationEvent' in window)) return;
+    tilt.requested = true;
+
+    const permissionRequest = window.DeviceOrientationEvent?.requestPermission;
+    if (typeof permissionRequest !== 'function') {
+      attachOrientationListener();
+      return;
+    }
+
+    try {
+      const permission = await permissionRequest.call(window.DeviceOrientationEvent);
+      if (permission === 'granted') {
+        attachOrientationListener();
+      }
+    } catch (err) {
+      tilt.targetX = 0;
+      tilt.targetY = 0;
+    }
+  }
+
   window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', resize);
   window.addEventListener('pointermove', event => {
     pointer.x = event.clientX;
     pointer.y = event.clientY;
@@ -286,6 +417,9 @@
   window.addEventListener('pointerleave', () => {
     pointer.active = false;
   });
+  window.addEventListener('pointerdown', requestTiltAccess, { once: true, passive: true });
+  window.addEventListener('touchstart', requestTiltAccess, { once: true, passive: true });
+  window.addEventListener('click', requestTiltAccess, { once: true, passive: true });
 
   window.lipuParticles = {
     pulse: createPulse,
