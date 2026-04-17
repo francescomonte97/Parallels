@@ -196,6 +196,16 @@
     }
   }
 
+  function recoverCanvas() {
+    resize();
+    pointer.active = false;
+    tilt.x = 0;
+    tilt.y = 0;
+    tilt.targetX = 0;
+    tilt.targetY = 0;
+    drawBackground();
+  }
+
   function drawBackground() {
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
     gradient.addColorStop(0, theme.bg[0]);
@@ -416,6 +426,14 @@
 
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', resize);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      requestAnimationFrame(recoverCanvas);
+    }
+  });
+  window.addEventListener('pageshow', () => {
+    requestAnimationFrame(recoverCanvas);
+  });
   window.addEventListener('pointermove', event => {
     pointer.x = event.clientX;
     pointer.y = event.clientY;

@@ -24,7 +24,7 @@ import {
 import {
   renderMessage,
   renderAudioMessage,
-  renderImageMessage,
+  renderImageTextMessage,
   renderLIPULoadingMessage,
   removeLIPULoadingMessage
 } from './render.js';
@@ -76,6 +76,7 @@ let pendingFaceAnalysisPromise = null;
 let pendingFaceLowConfidenceBlocked = false;
 let pendingFaceLowConfidenceAlertedAnalysisId = 0;
 let pendingFaceAnalysisFailed = false;
+let virtualKeyboardShift = false;
 
 function getImagePreviewElements() {
   return {
@@ -125,6 +126,85 @@ function toggleComposerActions() {
 
 function closeComposerActions() {
   setComposerActionsOpen(false);
+}
+
+function isVirtualKeyboardAvailable() {
+  return isMobileViewport() && dom.virtualKeyboard;
+}
+
+function setVirtualKeyboardOpen(open) {
+  if (!dom.virtualKeyboard) return;
+  dom.virtualKeyboard.classList.toggle('hidden', !open);
+  dom.virtualKeyboard.classList.toggle('is-open', Boolean(open));
+  dom.userInput?.classList.toggle('uses-virtual-keyboard', Boolean(open));
+}
+
+function openVirtualKeyboard() {
+  if (!isVirtualKeyboardAvailable()) return;
+  dom.userInput?.blur();
+  setVirtualKeyboardOpen(true);
+}
+
+function closeVirtualKeyboard() {
+  setVirtualKeyboardOpen(false);
+}
+
+function syncMobileKeyboardMode() {
+  if (!dom.userInput) return;
+
+  const useVirtualKeyboard = isVirtualKeyboardAvailable();
+  dom.userInput.readOnly = useVirtualKeyboard;
+  dom.userInput.setAttribute('inputmode', useVirtualKeyboard ? 'none' : 'text');
+
+  if (!useVirtualKeyboard) {
+    closeVirtualKeyboard();
+  }
+}
+
+function updateVirtualKeyboardCase() {
+  if (!dom.virtualKeyboard) return;
+
+  dom.virtualKeyboard.querySelectorAll('[data-key]').forEach(button => {
+    const value = button.dataset.key || '';
+    if (value.length === 1 && /[a-zàèéìòù]/i.test(value)) {
+      button.textContent = virtualKeyboardShift ? value.toUpperCase() : value.toLowerCase();
+    }
+  });
+}
+
+function appendToInput(value = '') {
+  if (!dom.userInput || !value) return;
+  dom.userInput.value += value;
+  dom.userInput.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function backspaceInput() {
+  if (!dom.userInput) return;
+  dom.userInput.value = dom.userInput.value.slice(0, -1);
+  dom.userInput.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+async function handleVirtualKeyboardAction(action = '') {
+  if (action === 'backspace') {
+    backspaceInput();
+    return;
+  }
+
+  if (action === 'space') {
+    appendToInput(' ');
+    return;
+  }
+
+  if (action === 'newline') {
+    appendToInput('\n');
+    return;
+  }
+
+  if (action === 'shift') {
+    virtualKeyboardShift = !virtualKeyboardShift;
+    dom.virtualKeyboard?.classList.toggle('has-shift', virtualKeyboardShift);
+    updateVirtualKeyboardCase();
+  }
 }
 
 function getFaceDetectorInputSize() {
@@ -1420,6 +1500,7 @@ export async function handleTextMessage() {
 
   if (!text && !imageFile) return;
 
+  closeVirtualKeyboard();
   animateSendButton();
   pulseParticles('send');
   disableComposer(true);
@@ -1447,13 +1528,11 @@ export async function handleTextMessage() {
 
     const sendImageFile = imageFile ? await compressImageForSend(imageFile) : null;
 
-    if (text) {
-      renderMessage('user', text);
-    }
-
     if (sendImageFile) {
       const imageDataUrl = await blobToDataURL(sendImageFile);
-      renderImageMessage('user', imageDataUrl);
+      renderImageTextMessage('user', imageDataUrl, text);
+    } else if (text) {
+      renderMessage('user', text);
     }
 
     dom.userInput.value = '';
@@ -1554,7 +1633,11 @@ export async function handleTextMessage() {
   } finally {
     disableComposer(false);
     updateSendButtonState();
-    dom.userInput.focus();
+    if (!isMobileViewport()) {
+      dom.userInput.focus();
+    } else {
+      dom.userInput.blur();
+    }
   }
 }
 
@@ -1635,6 +1718,11 @@ export function bindEvents() {
   updatePendingImageUI();
   clearFacePreviewUI();
   updateSendButtonState();
+  syncMobileKeyboardMode();
+  updateVirtualKeyboardCase();
+
+  window.addEventListener('resize', syncMobileKeyboardMode);
+  window.addEventListener('orientationchange', syncMobileKeyboardMode);
 
   dom.composerActionsBtn?.addEventListener('click', e => {
     e.preventDefault();
@@ -1645,6 +1733,15 @@ export function bindEvents() {
   document.addEventListener('click', e => {
     if (!dom.composerActions?.contains(e.target)) {
       closeComposerActions();
+    }
+
+    if (
+      isVirtualKeyboardAvailable() &&
+      !dom.virtualKeyboard.contains(e.target) &&
+      !dom.userInput?.contains(e.target) &&
+      !dom.composerCenter?.contains(e.target)
+    ) {
+      closeVirtualKeyboard();
     }
   });
 
@@ -1677,13 +1774,62 @@ export function bindEvents() {
   });
 
   dom.userInput.addEventListener('keydown', async e => {
+    if (isVirtualKeyboardAvailable()) {
+      e.preventDefault();
+      return;
+    }
+
     if (e.key === 'Enter') {
       e.preventDefault();
       await handleTextMessage();
     }
   });
 
+  dom.userInput.addEventListener('pointerdown', e => {
+    if (!isVirtualKeyboardAvailable()) return;
+    e.preventDefault();
+    openVirtualKeyboard();
+  });
+
+  dom.composerCenter?.addEventListener('click', e => {
+    if (!isVirtualKeyboardAvailable()) return;
+    if (e.target.closest('button')) return;
+    openVirtualKeyboard();
+  });
+
+  dom.userInput.addEventListener('focus', () => {
+    if (!isVirtualKeyboardAvailable()) return;
+    dom.userInput.blur();
+    openVirtualKeyboard();
+  });
+
   dom.userInput.addEventListener('input', updateSendButtonState);
+
+  dom.virtualKeyboard?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+  });
+
+  dom.virtualKeyboard?.addEventListener('click', async e => {
+    const button = e.target.closest('button');
+    if (!button) return;
+
+    const action = button.dataset.action || '';
+    const key = button.dataset.key || '';
+
+    if (action) {
+      await handleVirtualKeyboardAction(action);
+      return;
+    }
+
+    if (key) {
+      appendToInput(virtualKeyboardShift ? key.toUpperCase() : key.toLowerCase());
+      if (virtualKeyboardShift) {
+        virtualKeyboardShift = false;
+        dom.virtualKeyboard?.classList.remove('has-shift');
+        updateVirtualKeyboardCase();
+      }
+    }
+  });
 
   dom.imageBtn?.addEventListener('click', () => {
     closeComposerActions();

@@ -8,8 +8,10 @@ export const dom = {
   importMemoryInput: document.getElementById('import-memory-input'),
 
   chatBox: document.getElementById('chat-box'),
+  composerCenter: document.querySelector('.composer-center'),
   userInput: document.getElementById('user-input'),
   sendBtn: document.getElementById('send-btn'),
+  virtualKeyboard: document.getElementById('virtual-keyboard'),
   composerActions: document.getElementById('composer-actions'),
   composerActionsBtn: document.getElementById('composer-actions-btn'),
   composerActionsMenu: document.getElementById('composer-actions-menu'),

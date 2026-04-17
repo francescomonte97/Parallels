@@ -56,6 +56,39 @@ export function renderImageMessage(role, imageSource) {
   appendToChat(row);
 }
 
+export function renderImageTextMessage(role, imageSource, text = '') {
+  const safeRole = role === 'user' ? 'user' : 'lipu';
+
+  const row = document.createElement('div');
+  row.className = `message-row ${safeRole} message-enter`;
+
+  if (safeRole === 'lipu') {
+    row.appendChild(createAvatar());
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = `message ${safeRole === 'user' ? 'user-msg' : 'lipu-msg'} image-text-bubble`;
+
+  const img = document.createElement('img');
+  img.src = imageSource;
+  img.alt = 'Immagine inviata';
+  img.className = 'chat-image';
+  img.loading = 'lazy';
+
+  bubble.appendChild(img);
+
+  const safeText = String(text || '').trim();
+  if (safeText) {
+    const caption = document.createElement('div');
+    caption.className = 'chat-image-caption';
+    caption.textContent = safeText;
+    bubble.appendChild(caption);
+  }
+
+  row.appendChild(bubble);
+  appendToChat(row);
+}
+
 function createPlayIcon() {
   return `
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
