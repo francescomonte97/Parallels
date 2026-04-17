@@ -864,9 +864,11 @@ function setPendingImage(file) {
     URL.revokeObjectURL(pendingImagePreviewUrl);
   }
 
+  resetAudioComposerState();
   pendingImageFile = file;
   pendingImagePreviewUrl = URL.createObjectURL(file);
   updatePendingImageUI();
+  updateSendButtonState();
 }
 
 function loadImageElementFromBlob(blob) {
@@ -947,6 +949,7 @@ function clearPendingImage() {
   setParticlesScanning(false);
   clearFacePreviewUI();
   updatePendingImageUI();
+  updateSendButtonState();
 }
 
 async function buildImagePrompt(file, userText = '') {
@@ -1074,8 +1077,13 @@ function disableComposer(disabled) {
 }
 
 function updateSendButtonState() {
-  const hasText = Boolean(dom.userInput.value.trim());
-  dom.sendBtn.classList.toggle('has-text', hasText);
+  const canSend = Boolean(
+    dom.userInput.value.trim() ||
+    pendingImageFile ||
+    state.lastAudioBlob
+  );
+
+  dom.sendBtn.classList.toggle('has-text', canSend);
 }
 
 function animateSendButton() {
@@ -1545,6 +1553,8 @@ export function bindEvents() {
     if (state.isRecording) {
       await stopRecording();
       await handleAudioMessage();
+    } else if (pendingImageFile || dom.userInput.value.trim()) {
+      await handleTextMessage();
     } else if (state.lastAudioBlob) {
       await handleAudioMessage();
     } else {
