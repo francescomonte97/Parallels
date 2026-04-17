@@ -31,6 +31,7 @@
   let pixelRatio = 1;
   let particles = [];
   let thinking = false;
+  let scanning = false;
   let pulse = null;
   let theme = loadStoredTheme();
 
@@ -192,13 +193,24 @@
       ctx.fillStyle = thinkingGlow;
       ctx.fillRect(0, 0, width, height);
     }
+
+    if (scanning) {
+      const scanAlpha = 0.025 + Math.sin(Date.now() / 180) * 0.018;
+      const scanGlow = ctx.createRadialGradient(width * 0.5, height * 0.52, 0, width * 0.5, height * 0.52, width * 0.70);
+      scanGlow.addColorStop(0, rgba(theme.accent, Math.max(0.006, scanAlpha)));
+      scanGlow.addColorStop(0.48, rgba(theme.reply, Math.max(0.004, scanAlpha * 0.62)));
+      scanGlow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = scanGlow;
+      ctx.fillRect(0, 0, width, height);
+    }
   }
 
   function step() {
     drawBackground();
     const pulseAlpha = drawPulse();
-    const thinkingBoost = thinking ? 1.32 : 1;
-    const thinkingLineBoost = thinking ? 0.10 : 0;
+    const scanWave = scanning ? (0.5 + Math.sin(Date.now() / 150) * 0.5) : 0;
+    const thinkingBoost = thinking ? 1.32 : scanning ? 1.14 + scanWave * 0.12 : 1;
+    const thinkingLineBoost = thinking ? 0.10 : scanning ? 0.05 + scanWave * 0.08 : 0;
 
     for (const particle of particles) {
       particle.phase += 0.015;
@@ -240,7 +252,7 @@
 
       ctx.beginPath();
       ctx.arc(a.x, a.y, a.size, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(theme.particle, clamp(a.alpha + pulseAlpha * 0.32 + (thinking ? 0.08 : 0), 0, 0.82));
+      ctx.fillStyle = rgba(theme.particle, clamp(a.alpha + pulseAlpha * 0.32 + (thinking ? 0.08 : 0) + (scanning ? scanWave * 0.10 : 0), 0, 0.82));
       ctx.fill();
 
       for (let j = i + 1; j < particles.length; j += 1) {
@@ -288,6 +300,9 @@
     },
     setThinking(active) {
       thinking = Boolean(active);
+    },
+    setScanning(active) {
+      scanning = Boolean(active);
     }
   };
 

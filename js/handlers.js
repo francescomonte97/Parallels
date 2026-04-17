@@ -55,6 +55,9 @@ const KNOWN_FACES_JSON_PATH = './js/known-faces.json';
 const FACE_API_MODELS_PATH = './models';
 const LIPU_SELF_MIN_SCORE = 0.96;
 const KNOWN_FACE_MIN_SCORE = 0.94;
+const IMAGE_SEND_MAX_DIMENSION = 1600;
+const IMAGE_SEND_JPEG_QUALITY = 0.82;
+const FACE_ANALYSIS_TIMEOUT_MS = 2800;
 
 let knownFacesCache = null;
 
@@ -70,6 +73,7 @@ let pendingFaceMatches = [];
 let pendingFaceAnalysisPromise = null;
 let pendingFaceLowConfidenceBlocked = false;
 let pendingFaceLowConfidenceAlertedAnalysisId = 0;
+let pendingFaceAnalysisFailed = false;
 
 function getImagePreviewElements() {
   return {
@@ -78,6 +82,28 @@ function getImagePreviewElements() {
     badge: document.getElementById('face-count-badge'),
     crops: document.getElementById('face-crops')
   };
+}
+
+function isMobileViewport() {
+  return window.matchMedia?.('(max-width: 768px), (pointer: coarse)')?.matches || false;
+}
+
+function getFaceDetectorInputSize() {
+  return isMobileViewport() ? 320 : 512;
+}
+
+function setFaceAnalysisStatus(text = '') {
+  const { badge } = getImagePreviewElements();
+  if (!badge) return;
+
+  if (!text) {
+    badge.textContent = '';
+    badge.classList.add('hidden');
+    return;
+  }
+
+  badge.textContent = text;
+  badge.classList.remove('hidden');
 }
 
 function normalizeExtractedImageText(value = '') {
@@ -129,12 +155,12 @@ function hasUncertainKnownFaces() {
 
 async function waitForFaceMatches(timeout = 2200) {
   if (pendingFaceAnalysisPromise) {
-    await Promise.race([
-      pendingFaceAnalysisPromise.catch(() => undefined),
-      new Promise(resolve => setTimeout(resolve, timeout))
+    const completed = await Promise.race([
+      pendingFaceAnalysisPromise.then(() => true).catch(() => true),
+      new Promise(resolve => setTimeout(() => resolve(false), timeout))
     ]);
 
-    return true;
+    return completed;
   }
 
   const start = Date.now();
@@ -498,6 +524,9 @@ function clearFacePreviewUI() {
   pendingFaceDetections = [];
   pendingFaceMatches = [];
   pendingFaceAnalysisId += 1;
+  pendingFaceAnalysisFailed = false;
+  pendingFaceLowConfidenceBlocked = false;
+  setParticlesScanning(false);
 
   if (preview) {
     preview.removeAttribute('src');
@@ -599,9 +628,10 @@ async function analyzePendingImageFaces(previewUrl) {
 
   container.classList.remove('hidden');
   preview.src = previewUrl;
-  badge.textContent = '';
-  badge.classList.add('hidden');
+  setFaceAnalysisStatus('Analisi volto...');
+  setParticlesScanning(true);
   crops.innerHTML = '';
+  pendingFaceAnalysisFailed = false;
 
   try {
     if (!isCurrentPendingPreview(previewUrl)) return;
@@ -623,7 +653,7 @@ async function analyzePendingImageFaces(previewUrl) {
       .detectAllFaces(
         preview,
         new faceapi.TinyFaceDetectorOptions({
-          inputSize: 512,
+          inputSize: getFaceDetectorInputSize(),
           scoreThreshold: 0.25
         })
       )
@@ -707,6 +737,7 @@ console.warn('[DEBUG] before-match', {
 
     pendingFaceMatches = matches;
     pendingFaceLowConfidenceBlocked = hasUncertainKnownFaces();
+    pendingFaceAnalysisFailed = false;
     updateFaceCountBadge(pendingFaceDetections.length);
     renderFaceCrops(preview, pendingFaceDetections, matches);
 
@@ -725,9 +756,13 @@ console.warn('[DEBUG] before-match', {
     pendingFaceDetections = [];
     pendingFaceMatches = [];
     pendingFaceLowConfidenceBlocked = false;
-    badge.textContent = '';
-    badge.classList.add('hidden');
+    pendingFaceAnalysisFailed = true;
+    setFaceAnalysisStatus('');
     crops.innerHTML = '';
+  } finally {
+    if (isCurrentPendingPreview(previewUrl) && analysisId === pendingFaceAnalysisId) {
+      setParticlesScanning(false);
+    }
   }
 }
 
@@ -834,6 +869,70 @@ function setPendingImage(file) {
   updatePendingImageUI();
 }
 
+function loadImageElementFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Impossibile leggere l’immagine'));
+    };
+
+    image.src = url;
+  });
+}
+
+async function compressImageForSend(file) {
+  if (!file || !String(file.type || '').startsWith('image/')) return file;
+  if (String(file.type || '').toLowerCase() === 'image/gif') return file;
+
+  try {
+    const image = await loadImageElementFromBlob(file);
+    const width = Number(image.naturalWidth || image.width || 0);
+    const height = Number(image.naturalHeight || image.height || 0);
+
+    if (!width || !height) return file;
+
+    const longestSide = Math.max(width, height);
+    if (longestSide <= IMAGE_SEND_MAX_DIMENSION && file.size < 1_200_000) {
+      return file;
+    }
+
+    const scale = Math.min(1, IMAGE_SEND_MAX_DIMENSION / longestSide);
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+
+    ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+
+    const blob = await new Promise(resolve => {
+      canvas.toBlob(resolve, 'image/jpeg', IMAGE_SEND_JPEG_QUALITY);
+    });
+
+    if (!blob) return file;
+
+    return new File(
+      [blob],
+      String(file.name || 'immagine').replace(/\.[^.]+$/, '') + '.jpg',
+      { type: 'image/jpeg', lastModified: Date.now() }
+    );
+  } catch (err) {
+    console.warn('Compressione immagine fallita, uso originale:', err);
+    return file;
+  }
+}
+
 function clearPendingImage() {
   if (pendingImagePreviewUrl) {
     URL.revokeObjectURL(pendingImagePreviewUrl);
@@ -844,6 +943,8 @@ function clearPendingImage() {
   pendingFaceAnalysisPromise = null;
   pendingFaceLowConfidenceBlocked = false;
   pendingFaceLowConfidenceAlertedAnalysisId = 0;
+  pendingFaceAnalysisFailed = false;
+  setParticlesScanning(false);
   clearFacePreviewUI();
   updatePendingImageUI();
 }
@@ -965,6 +1066,7 @@ function disableComposer(disabled) {
   dom.recordBtn.disabled = disabled;
   dom.userInput.disabled = disabled;
   dom.imageBtn.disabled = disabled;
+  if (dom.cameraBtn) dom.cameraBtn.disabled = disabled;
 
   if (pendingImageUI?.removeBtn) {
     pendingImageUI.removeBtn.disabled = disabled;
@@ -991,6 +1093,10 @@ function pulseParticles(type = 'send') {
 
 function setParticlesThinking(active) {
   window.lipuParticles?.setThinking?.(active);
+}
+
+function setParticlesScanning(active) {
+  window.lipuParticles?.setScanning?.(active);
 }
 
 export function showAudioHint(text) {
@@ -1219,7 +1325,16 @@ export async function handleTextMessage() {
 
   try {
     if (imageFile) {
-      await waitForFaceMatches();
+      const faceAnalysisCompleted = await waitForFaceMatches(FACE_ANALYSIS_TIMEOUT_MS);
+
+      if (!faceAnalysisCompleted) {
+        pendingFaceAnalysisId += 1;
+        pendingFaceAnalysisPromise = null;
+        pendingFaceAnalysisFailed = true;
+        pendingFaceLowConfidenceBlocked = false;
+        setParticlesScanning(false);
+        setFaceAnalysisStatus('');
+      }
 
       if (pendingFaceLowConfidenceBlocked || hasUncertainKnownFaces()) {
         if (!pendingFaceLowConfidenceAlertedAnalysisId) {
@@ -1229,12 +1344,14 @@ export async function handleTextMessage() {
       }
     }
 
+    const sendImageFile = imageFile ? await compressImageForSend(imageFile) : null;
+
     if (text) {
       renderMessage('user', text);
     }
 
-    if (imageFile) {
-      const imageDataUrl = await blobToDataURL(imageFile);
+    if (sendImageFile) {
+      const imageDataUrl = await blobToDataURL(sendImageFile);
       renderImageMessage('user', imageDataUrl);
     }
 
@@ -1252,7 +1369,7 @@ export async function handleTextMessage() {
 
     let aiText = '';
 
-    if (imageFile) {
+    if (sendImageFile) {
       const HIGH_THRESHOLD = Number(
         (await loadKnownFacesData())?.thresholds?.known || KNOWN_FACE_MIN_SCORE
       );
@@ -1320,7 +1437,7 @@ export async function handleTextMessage() {
           return `${f.label} (${position})`;
         });
 
-      aiText = await analyzeImageWithAI(imageFile, recognized, text);
+      aiText = await analyzeImageWithAI(sendImageFile, recognized, text);
     } else {
       aiText = await getLIPUResponse(text);
     }
@@ -1460,7 +1577,11 @@ dom.cameraBtn?.addEventListener('click', (e) => {
   e.preventDefault();
 
   if (dom.cameraInput) {
-    dom.cameraInput.removeAttribute('capture'); // fallback desktop
+    if (isMobileViewport()) {
+      dom.cameraInput.setAttribute('capture', 'environment');
+    } else {
+      dom.cameraInput.removeAttribute('capture');
+    }
     dom.cameraInput.click();
   }
 });
