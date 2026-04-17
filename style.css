@@ -642,7 +642,7 @@ body::before {
   box-shadow:
     0 -14px 32px rgba(0, 0, 0, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.045);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .composer::before {
@@ -654,6 +654,78 @@ body::before {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(145, 231, 210, 0.28), rgba(255, 196, 122, 0.14), rgba(154, 174, 255, 0.30), transparent);
   opacity: 0.9;
+}
+
+.composer-actions {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 3;
+}
+
+.composer-actions-btn {
+  color: #efffff;
+  border-color: rgba(140, 231, 212, 0.14);
+}
+
+.composer-actions-btn.is-open {
+  color: #071018;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.38), transparent 46%),
+    linear-gradient(135deg, #91e7d2, #9aaeff);
+  border-color: rgba(246, 247, 251, 0.22);
+  box-shadow:
+    0 14px 30px rgba(98, 132, 190, 0.28),
+    0 0 22px rgba(145, 231, 210, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.composer-actions-btn.is-open .icon {
+  transform: rotate(45deg);
+}
+
+.composer-actions-btn.recording {
+  color: #fff8f5;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.22), transparent 45%),
+    linear-gradient(135deg, var(--fire-1), var(--fire-2));
+  border-color: rgba(255, 210, 188, 0.34);
+  animation: micPulse 1.2s ease-in-out infinite;
+}
+
+.composer-actions-menu {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.045)),
+    rgba(7, 13, 25, 0.90);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    0 20px 44px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(20px);
+  transform: translate(-50%, 8px) scale(0.94);
+  transform-origin: bottom center;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.22s var(--motion-ease), opacity 0.18s ease;
+}
+
+.composer-actions-menu.is-open {
+  transform: translate(-50%, 0) scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.composer-action-item {
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  border-radius: 14px;
 }
 
 .file-input-native {
@@ -716,26 +788,39 @@ body::before {
 }
 
 .pending-image-chip {
-  max-width: 150px;
+  max-width: 78px;
   min-width: 0;
   align-items: center;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035)),
+    rgba(8, 14, 27, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 14px;
-  padding: 6px 8px;
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 .pending-image-preview {
   display: block;
   flex-shrink: 0;
+  width: 34px !important;
+  height: 34px !important;
 }
 
 .pending-image-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
+}
+
+.pending-image-remove {
+  flex-shrink: 0;
+  transition: transform 0.18s var(--motion-ease), background 0.18s ease;
+}
+
+.pending-image-remove:hover {
+  transform: scale(1.05);
+  background: rgba(255, 255, 255, 0.14) !important;
 }
 
 .pending-image-remove:disabled {
@@ -1120,6 +1205,11 @@ body::before {
     border-radius: 15px;
   }
 
+  .composer {
+    gap: 7px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+
   .icon {
     width: 19px;
     height: 19px;
@@ -1133,12 +1223,39 @@ body::before {
   }
 
   .pending-image-chip {
-    max-width: 120px;
+    max-width: 70px;
+    padding: 4px;
+    border-radius: 13px;
+  }
+
+  .pending-image-preview {
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 9px !important;
+  }
+
+  .pending-image-remove {
+    width: 24px !important;
+    height: 24px !important;
+    font-size: 15px !important;
   }
 
   .image-preview-wrap {
-    width: 54px;
-    height: 54px;
+    width: 48px;
+    height: 48px;
+  }
+
+  .composer-action-item {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    border-radius: 13px;
+  }
+
+  .composer-actions-menu {
+    gap: 7px;
+    padding: 7px;
+    border-radius: 16px;
   }
 
   .face-count-badge {

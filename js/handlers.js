@@ -106,6 +106,25 @@ function openFilePicker(input, { capture = false } = {}) {
   }
 }
 
+function setComposerActionsOpen(open) {
+  if (!dom.composerActionsBtn || !dom.composerActionsMenu) return;
+
+  const isOpen = Boolean(open);
+  dom.composerActionsBtn.setAttribute('aria-expanded', String(isOpen));
+  dom.composerActionsBtn.classList.toggle('is-open', isOpen);
+  dom.composerActionsMenu.classList.toggle('hidden', !isOpen);
+  dom.composerActionsMenu.classList.toggle('is-open', isOpen);
+}
+
+function toggleComposerActions() {
+  const isOpen = dom.composerActionsBtn?.getAttribute('aria-expanded') === 'true';
+  setComposerActionsOpen(!isOpen);
+}
+
+function closeComposerActions() {
+  setComposerActionsOpen(false);
+}
+
 function getFaceDetectorInputSize() {
   return isMobileViewport() ? 320 : 512;
 }
@@ -796,8 +815,7 @@ function ensurePendingImageUI() {
   wrap.className = 'pending-image-chip';
   wrap.style.display = 'none';
   wrap.style.alignItems = 'center';
-  wrap.style.gap = '8px';
-  wrap.style.paddingRight = '10px';
+  wrap.style.gap = '5px';
   wrap.style.flexShrink = '0';
 
   const preview = document.createElement('img');
@@ -811,7 +829,8 @@ function ensurePendingImageUI() {
 
   const label = document.createElement('span');
   label.className = 'pending-image-label';
-  label.textContent = 'Immagine';
+  label.textContent = '';
+  label.hidden = true;
   label.style.fontSize = '12px';
   label.style.color = 'rgba(255,255,255,0.72)';
   label.style.whiteSpace = 'nowrap';
@@ -859,7 +878,7 @@ function updatePendingImageUI() {
 
   if (pendingImageFile && pendingImagePreviewUrl) {
     ui.preview.src = pendingImagePreviewUrl;
-    ui.label.textContent = pendingImageFile.name || 'Immagine';
+    ui.label.textContent = '';
     ui.wrap.style.display = 'inline-flex';
     pendingFaceLowConfidenceBlocked = false;
     pendingFaceLowConfidenceAlertedAnalysisId = 0;
@@ -868,7 +887,7 @@ function updatePendingImageUI() {
     });
   } else {
     ui.preview.removeAttribute('src');
-    ui.label.textContent = 'Immagine';
+    ui.label.textContent = '';
     ui.wrap.style.display = 'none';
     pendingFaceAnalysisPromise = null;
     pendingFaceLowConfidenceBlocked = false;
@@ -1107,9 +1126,12 @@ function saveTextToMemory(role, content) {
 }
 
 function disableComposer(disabled) {
+  if (disabled) closeComposerActions();
+
   dom.sendBtn.disabled = disabled;
   dom.recordBtn.disabled = disabled;
   dom.userInput.disabled = disabled;
+  if (dom.composerActionsBtn) dom.composerActionsBtn.disabled = disabled;
   dom.imageBtn.disabled = disabled;
   if (dom.cameraBtn) dom.cameraBtn.disabled = disabled;
 
@@ -1585,7 +1607,26 @@ export function bindEvents() {
   clearFacePreviewUI();
   updateSendButtonState();
 
+  dom.composerActionsBtn?.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleComposerActions();
+  });
+
+  document.addEventListener('click', e => {
+    if (!dom.composerActions?.contains(e.target)) {
+      closeComposerActions();
+    }
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      closeComposerActions();
+    }
+  });
+
   dom.recordBtn.addEventListener('click', async () => {
+    closeComposerActions();
     if (!state.isRecording) {
       await startRecording();
     } else {
@@ -1616,6 +1657,7 @@ export function bindEvents() {
   dom.userInput.addEventListener('input', updateSendButtonState);
 
   dom.imageBtn?.addEventListener('click', () => {
+    closeComposerActions();
     openFilePicker(dom.imageInput, { capture: false });
   });
 
@@ -1627,10 +1669,11 @@ export function bindEvents() {
     dom.imageInput.value = '';
   });
 
-dom.cameraBtn?.addEventListener('click', (e) => {
-  e.preventDefault();
-  openFilePicker(dom.cameraInput, { capture: isMobileViewport() });
-});
+  dom.cameraBtn?.addEventListener('click', e => {
+    e.preventDefault();
+    closeComposerActions();
+    openFilePicker(dom.cameraInput, { capture: isMobileViewport() });
+  });
 
   // 📷 Camera capture → same pipeline as image
   dom.cameraInput?.addEventListener('change', async e => {

@@ -100,10 +100,10 @@
 
   function getParticleCount() {
     const area = width * height;
-    const divisor = mobileMode ? 7600 : 4200;
+    const divisor = mobileMode ? 6000 : 4200;
     const base = Math.round(area / divisor);
     return mobileMode
-      ? Math.max(42, Math.min(96, base))
+      ? Math.max(64, Math.min(118, base))
       : Math.max(72, Math.min(190, base));
   }
 
@@ -230,9 +230,12 @@
   }
 
   function drawParticleConnections(pulseAlpha, thinkingLineBoost) {
-    const maxDistance = thinking ? (mobileMode ? 110 : 138) : scanning ? (mobileMode ? 102 : 124) : (mobileMode ? 86 : 112);
+    const maxDistance = thinking ? (mobileMode ? 146 : 138) : scanning ? (mobileMode ? 136 : 124) : (mobileMode ? 124 : 112);
+    const maxDistanceSq = maxDistance * maxDistance;
     const cellSize = maxDistance;
     const grid = new Map();
+    const maxConnections = mobileMode ? 420 : 1200;
+    let drawnConnections = 0;
 
     for (let i = 0; i < particles.length; i += 1) {
       const p = particles[i];
@@ -260,21 +263,25 @@
 
           for (const j of bucket) {
             if (j <= i) continue;
+            if (drawnConnections >= maxConnections) return;
 
             const b = particles[j];
             const dx = a.x - b.x;
             const dy = a.y - b.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
+            const distanceSq = dx * dx + dy * dy;
 
-            if (distance > maxDistance) continue;
+            if (distanceSq > maxDistanceSq) continue;
 
-            const opacity = (1 - distance / maxDistance) * (0.16 + thinkingLineBoost + pulseAlpha * (mobileMode ? 0.22 : 0.34));
+            const distance = Math.sqrt(distanceSq);
+
+            const opacity = (1 - distance / maxDistance) * (0.24 + thinkingLineBoost + pulseAlpha * (mobileMode ? 0.30 : 0.36));
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.strokeStyle = rgba(theme.line, opacity);
-            ctx.lineWidth = thinking ? 0.86 : mobileMode ? 0.62 : 0.75;
+            ctx.lineWidth = thinking ? 0.9 : mobileMode ? 0.78 : 0.75;
             ctx.stroke();
+            drawnConnections += 1;
           }
         }
       }
@@ -332,6 +339,8 @@
       }
     }
 
+    drawParticleConnections(pulseAlpha, thinkingLineBoost);
+
     for (let i = 0; i < particles.length; i += 1) {
       const a = particles[i];
 
@@ -340,8 +349,6 @@
       ctx.fillStyle = rgba(theme.particle, clamp(a.alpha + pulseAlpha * 0.32 + (thinking ? 0.08 : 0) + (scanning ? scanWave * 0.10 : 0), 0, 0.82));
       ctx.fill();
     }
-
-    drawParticleConnections(pulseAlpha, thinkingLineBoost);
 
     requestAnimationFrame(step);
   }

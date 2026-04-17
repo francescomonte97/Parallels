@@ -5,6 +5,7 @@ import { formatTime } from './utils.js';
 export function startWaveUI() {
   dom.waveform.classList.add('active');
   dom.recordBtn.classList.add('recording');
+  dom.composerActionsBtn?.classList.add('recording');
   dom.recordingUI.classList.add('active');
   dom.userInput.style.display = 'none';
 
@@ -22,6 +23,7 @@ export function startWaveUI() {
 export function stopWaveUI(hasAudio = true) {
   dom.waveform.classList.remove('active');
   dom.recordBtn.classList.remove('recording');
+  dom.composerActionsBtn?.classList.remove('recording');
   clearInterval(state.recordingInterval);
 
   if (hasAudio) {
@@ -84,6 +86,7 @@ export function stopRecording() {
 
 export function resetAudioComposerState() {
   state.lastAudioBlob = null;
+  dom.composerActionsBtn?.classList.remove('recording');
   dom.recordingUI.classList.remove('active');
   dom.userInput.style.display = 'block';
   dom.recordingTime.textContent = '00:00';

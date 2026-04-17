@@ -42,28 +42,38 @@
     <main id="chat-box" class="chat"></main>
 
     <div class="composer">
-      <button id="image-btn" class="icon-btn image-btn" aria-label="Invia immagine">
-        <svg viewBox="0 0 24 24" fill="none" class="icon">
-          <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="m8 14 2.5-2.5L14 15l2-2 2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="9" cy="10" r="1.2" fill="currentColor"/>
-        </svg>
-      </button>
-      <button id="camera-btn" class="icon-btn" aria-label="Scatta foto">
-        <svg viewBox="0 0 24 24" fill="none" class="icon">
-          <path d="M4 7h3l2-2h6l2 2h3v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.8"/>
-        </svg>
-      </button>
+      <div id="composer-actions" class="composer-actions">
+        <button id="composer-actions-btn" class="icon-btn composer-actions-btn" type="button" aria-label="Apri opzioni media" aria-expanded="false" aria-controls="composer-actions-menu">
+          <svg viewBox="0 0 24 24" fill="none" class="icon">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          </svg>
+        </button>
 
-      <button id="record-btn" class="icon-btn mic-btn" aria-label="Registra audio">
-        <svg viewBox="0 0 24 24" fill="none" class="icon">
-          <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          <path d="M12 19v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          <path d="M8 22h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        </svg>
-      </button>
+        <div id="composer-actions-menu" class="composer-actions-menu hidden" role="menu" aria-label="Opzioni media">
+          <button id="image-btn" class="icon-btn image-btn composer-action-item" type="button" role="menuitem" aria-label="Invia immagine">
+            <svg viewBox="0 0 24 24" fill="none" class="icon">
+              <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="m8 14 2.5-2.5L14 15l2-2 2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="9" cy="10" r="1.2" fill="currentColor"/>
+            </svg>
+          </button>
+          <button id="camera-btn" class="icon-btn composer-action-item" type="button" role="menuitem" aria-label="Scatta foto">
+            <svg viewBox="0 0 24 24" fill="none" class="icon">
+              <path d="M4 7h3l2-2h6l2 2h3v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="1.8"/>
+            </svg>
+          </button>
+
+          <button id="record-btn" class="icon-btn mic-btn composer-action-item" type="button" role="menuitem" aria-label="Registra audio">
+            <svg viewBox="0 0 24 24" fill="none" class="icon">
+              <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M12 19v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M8 22h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
 
       <div class="composer-center">
         <input
