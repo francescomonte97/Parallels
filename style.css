@@ -656,6 +656,19 @@ body::before {
   opacity: 0.9;
 }
 
+.file-input-native {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0.01;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  z-index: -1;
+}
+
 .composer-center {
   flex: 1;
   min-width: 0;

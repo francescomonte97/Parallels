@@ -88,6 +88,24 @@ function isMobileViewport() {
   return window.matchMedia?.('(max-width: 768px), (pointer: coarse)')?.matches || false;
 }
 
+function openFilePicker(input, { capture = false } = {}) {
+  if (!input) return;
+
+  input.value = '';
+
+  if (capture) {
+    input.setAttribute('capture', 'environment');
+  } else {
+    input.removeAttribute('capture');
+  }
+
+  try {
+    input.click();
+  } catch (err) {
+    console.warn('Apertura file picker fallita:', err);
+  }
+}
+
 function getFaceDetectorInputSize() {
   return isMobileViewport() ? 320 : 512;
 }
@@ -530,6 +548,7 @@ function clearFacePreviewUI() {
 
   if (preview) {
     preview.removeAttribute('src');
+    preview.classList.add('hidden');
   }
 
   if (badge) {
@@ -627,6 +646,7 @@ async function analyzePendingImageFaces(previewUrl) {
   if (!container || !preview || !badge || !crops || !previewUrl) return;
 
   container.classList.remove('hidden');
+  preview.classList.remove('hidden');
   preview.src = previewUrl;
   setFaceAnalysisStatus('Analisi volto...');
   setParticlesScanning(true);
@@ -890,6 +910,19 @@ function loadImageElementFromBlob(blob) {
   });
 }
 
+function dataURLToFile(dataUrl, filename = 'immagine.jpg') {
+  const [header, base64] = String(dataUrl || '').split(',');
+  const mime = header?.match(/data:([^;]+)/)?.[1] || 'image/jpeg';
+  const binary = atob(base64 || '');
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return new File([bytes], filename, { type: mime, lastModified: Date.now() });
+}
+
 async function compressImageForSend(file) {
   if (!file || !String(file.type || '').startsWith('image/')) return file;
   if (String(file.type || '').toLowerCase() === 'image/gif') return file;
@@ -919,7 +952,16 @@ async function compressImageForSend(file) {
     ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
 
     const blob = await new Promise(resolve => {
-      canvas.toBlob(resolve, 'image/jpeg', IMAGE_SEND_JPEG_QUALITY);
+      if (canvas.toBlob) {
+        canvas.toBlob(resolve, 'image/jpeg', IMAGE_SEND_JPEG_QUALITY);
+        return;
+      }
+
+      try {
+        resolve(dataURLToFile(canvas.toDataURL('image/jpeg', IMAGE_SEND_JPEG_QUALITY), 'immagine.jpg'));
+      } catch {
+        resolve(null);
+      }
     });
 
     if (!blob) return file;
@@ -1527,7 +1569,9 @@ export async function handleImageMessage(file) {
 
     setPendingImage(file);
     showAudioHint('Immagine pronta. Ora puoi scrivere un messaggio e inviare tutto insieme.');
-    dom.userInput.focus();
+    if (!isMobileViewport()) {
+      dom.userInput.focus();
+    }
   } catch (err) {
     const readableError = getReadableError(err);
     console.error('[handleImageMessage] errore completo:', err);
@@ -1572,7 +1616,7 @@ export function bindEvents() {
   dom.userInput.addEventListener('input', updateSendButtonState);
 
   dom.imageBtn?.addEventListener('click', () => {
-    dom.imageInput.click();
+    openFilePicker(dom.imageInput, { capture: false });
   });
 
   dom.imageInput?.addEventListener('change', async e => {
@@ -1585,15 +1629,7 @@ export function bindEvents() {
 
 dom.cameraBtn?.addEventListener('click', (e) => {
   e.preventDefault();
-
-  if (dom.cameraInput) {
-    if (isMobileViewport()) {
-      dom.cameraInput.setAttribute('capture', 'environment');
-    } else {
-      dom.cameraInput.removeAttribute('capture');
-    }
-    dom.cameraInput.click();
-  }
+  openFilePicker(dom.cameraInput, { capture: isMobileViewport() });
 });
 
   // 📷 Camera capture → same pipeline as image
