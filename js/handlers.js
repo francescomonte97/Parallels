@@ -47,6 +47,8 @@ import {
 let pendingImageFile = null;
 let pendingImagePreviewUrl = '';
 let pendingImageUI = null;
+let pendingImageNaturalWidth = 0;
+let pendingImageNaturalHeight = 0;
 
 let pendingFaceDetections = [];
 let pendingFaceAnalysisId = 0;
@@ -157,6 +159,28 @@ function normalizeExtractedImageText(value = '') {
 
 function isCurrentPendingPreview(previewUrl = '') {
   return Boolean(previewUrl && previewUrl === pendingImagePreviewUrl);
+}
+
+function loadImageElementFromUrl(url = '') {
+  return new Promise((resolve, reject) => {
+    if (!url) {
+      reject(new Error('URL immagine non valido'));
+      return;
+    }
+
+    const image = new Image();
+    image.decoding = 'async';
+
+    image.onload = () => {
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      reject(new Error('Impossibile preparare l’immagine'));
+    };
+
+    image.src = url;
+  });
 }
 
 function isLipuSelfLabel(label = '') {
@@ -675,11 +699,12 @@ async function analyzePendingImageFaces(previewUrl) {
   try {
     if (!isCurrentPendingPreview(previewUrl)) return;
 
-    if (!preview.complete) {
-      await preview.decode().catch(() => undefined);
-    }
+    const analysisImage = await loadImageElementFromUrl(previewUrl);
 
     if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
+
+    pendingImageNaturalWidth = Number(analysisImage.naturalWidth || analysisImage.width || 0);
+    pendingImageNaturalHeight = Number(analysisImage.naturalHeight || analysisImage.height || 0);
 
     const faceapi = window.faceapi;
     if (!faceapi) {
@@ -690,7 +715,7 @@ async function analyzePendingImageFaces(previewUrl) {
 
     const results = await faceapi
       .detectAllFaces(
-        preview,
+        analysisImage,
         new faceapi.TinyFaceDetectorOptions({
           inputSize: getFaceDetectorInputSize(),
           scoreThreshold: 0.25
@@ -753,7 +778,7 @@ console.warn('[DEBUG] before-match', {
 });
 
       if (!embedding.length) {
-        const faceCanvas = cropFaceDetectionToCanvas(preview, detection);
+        const faceCanvas = cropFaceDetectionToCanvas(analysisImage, detection);
         if (faceCanvas) {
           embedding = await generateEmbeddingFromCanvas(faceCanvas);
         }
@@ -778,7 +803,7 @@ console.warn('[DEBUG] before-match', {
     pendingFaceLowConfidenceBlocked = hasUncertainKnownFaces();
     pendingFaceAnalysisFailed = false;
     updateFaceCountBadge(pendingFaceDetections.length);
-    renderFaceCrops(preview, pendingFaceDetections, matches);
+    renderFaceCrops(analysisImage, pendingFaceDetections, matches);
 
     if (
       pendingFaceLowConfidenceBlocked &&
@@ -906,6 +931,8 @@ function setPendingImage(file) {
   resetAudioComposerState();
   pendingImageFile = file;
   pendingImagePreviewUrl = URL.createObjectURL(file);
+  pendingImageNaturalWidth = 0;
+  pendingImageNaturalHeight = 0;
   updatePendingImageUI();
   updateSendButtonState();
 }
@@ -1003,6 +1030,8 @@ function clearPendingImage() {
 
   pendingImageFile = null;
   pendingImagePreviewUrl = '';
+  pendingImageNaturalWidth = 0;
+  pendingImageNaturalHeight = 0;
   pendingFaceAnalysisPromise = null;
   pendingFaceLowConfidenceBlocked = false;
   pendingFaceLowConfidenceAlertedAnalysisId = 0;
@@ -1392,7 +1421,7 @@ export async function handleTextMessage() {
   if (!text && !imageFile) return;
 
   animateSendButton();
-  pulseParticles(imageFile ? 'audio' : 'send');
+  pulseParticles('send');
   disableComposer(true);
 
   try {
@@ -1464,8 +1493,8 @@ export async function handleTextMessage() {
         )
         .map(f => {
           const { preview } = getImagePreviewElements();
-          const imgWidth = Number(preview?.naturalWidth || 0);
-          const imgHeight = Number(preview?.naturalHeight || 0);
+          const imgWidth = Number(pendingImageNaturalWidth || preview?.naturalWidth || 0);
+          const imgHeight = Number(pendingImageNaturalHeight || preview?.naturalHeight || 0);
 
           const box = f.box || {};
           const x = Number(box.xMin || 0);

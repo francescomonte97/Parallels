@@ -129,18 +129,18 @@
 
   function createPulse(type = 'send') {
     const originMap = {
-      send: { x: width * 0.5, y: height * 0.92, strength: mobileMode ? 1.12 : 1.45, color: rgbaPrefix(theme.accent) },
-      reply: { x: width * 0.24, y: height * 0.18, strength: mobileMode ? 0.68 : 0.82, color: rgbaPrefix(theme.reply) },
-      audio: { x: width * 0.18, y: height * 0.88, strength: mobileMode ? 0.86 : 1.08, color: rgbaPrefix(theme.audio) }
+      send: { x: width * 0.5, y: height * 0.92, strength: 1.45, color: rgbaPrefix(theme.accent) },
+      reply: { x: width * 0.24, y: height * 0.18, strength: 0.82, color: rgbaPrefix(theme.reply) },
+      audio: { x: width * 0.18, y: height * 0.88, strength: 1.08, color: rgbaPrefix(theme.audio) }
     };
 
     const config = originMap[type] || originMap.send;
     pulse = {
       ...config,
       radius: 0,
-      maxRadius: Math.max(width, height) * (mobileMode ? 0.62 : 0.78),
+      maxRadius: Math.max(width, height) * 0.78,
       age: 0,
-      duration: type === 'reply' ? (mobileMode ? 42 : 54) : (mobileMode ? 48 : 64)
+      duration: type === 'reply' ? 54 : 64
     };
   }
 
@@ -234,7 +234,7 @@
     const maxDistanceSq = maxDistance * maxDistance;
     const cellSize = maxDistance;
     const grid = new Map();
-    const maxConnections = mobileMode ? 420 : 1200;
+    const maxConnections = mobileMode ? 620 : 1200;
     let drawnConnections = 0;
 
     for (let i = 0; i < particles.length; i += 1) {
@@ -298,8 +298,8 @@
     drawBackground();
     const pulseAlpha = drawPulse();
     const scanWave = scanning ? (0.5 + Math.sin(Date.now() / 150) * 0.5) : 0;
-    const thinkingBoost = thinking ? (mobileMode ? 1.18 : 1.32) : scanning ? (mobileMode ? 1.05 + scanWave * 0.08 : 1.14 + scanWave * 0.12) : 1;
-    const thinkingLineBoost = thinking ? (mobileMode ? 0.07 : 0.10) : scanning ? (mobileMode ? 0.035 + scanWave * 0.055 : 0.05 + scanWave * 0.08) : 0;
+    const thinkingBoost = thinking ? (mobileMode ? 1.28 : 1.32) : scanning ? (mobileMode ? 1.12 + scanWave * 0.11 : 1.14 + scanWave * 0.12) : 1;
+    const thinkingLineBoost = thinking ? (mobileMode ? 0.09 : 0.10) : scanning ? (mobileMode ? 0.048 + scanWave * 0.07 : 0.05 + scanWave * 0.08) : 0;
     const tiltForce = mobileMode ? 0.18 : 0.08;
 
     for (const particle of particles) {
@@ -329,10 +329,10 @@
         const dy = particle.y - pulse.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
         const ringDistance = Math.abs(distance - pulse.radius);
-        const ringWidth = mobileMode ? 58 : 78;
+        const ringWidth = mobileMode ? 72 : 78;
 
         if (ringDistance < ringWidth && distance > 1) {
-          const force = (1 - ringDistance / ringWidth) * (mobileMode ? 0.48 : 0.72) * pulse.strength;
+          const force = (1 - ringDistance / ringWidth) * (mobileMode ? 0.62 : 0.72) * pulse.strength;
           particle.x += (dx / distance) * force;
           particle.y += (dy / distance) * force;
         }
