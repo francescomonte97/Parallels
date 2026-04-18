@@ -1,4 +1,7 @@
 export const dom = {
+  bootScreen: document.getElementById('boot-screen'),
+  bootStatus: document.getElementById('boot-status'),
+  bootProgressBar: document.getElementById('boot-progress-bar'),
   confirmProfileModal: document.getElementById('confirm-profile-modal'),
   confirmProfileBackdrop: document.getElementById('confirm-profile-backdrop'),
   confirmProfileCancel: document.getElementById('confirm-profile-cancel'),

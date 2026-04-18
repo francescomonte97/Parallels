@@ -382,6 +382,90 @@ body::before {
   pointer-events: none;
 }
 
+.boot-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(140, 231, 212, 0.11), transparent 34%),
+    linear-gradient(180deg, rgba(7, 11, 20, 0.96), rgba(8, 13, 24, 0.92));
+  backdrop-filter: blur(18px) saturate(1.2);
+  opacity: 1;
+  transition: opacity 0.36s ease, transform 0.36s var(--motion-ease);
+}
+
+.boot-screen.is-hidden {
+  opacity: 0;
+  transform: scale(1.015);
+  pointer-events: none;
+}
+
+.boot-card {
+  width: min(84vw, 310px);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 22px 18px;
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.045)),
+    rgba(8, 14, 27, 0.62);
+  border: 1px solid rgba(255,255,255,0.13);
+  box-shadow:
+    0 24px 80px rgba(0,0,0,0.42),
+    inset 0 1px 0 rgba(255,255,255,0.14);
+}
+
+.boot-mark {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  color: #f6f7fb;
+  font-size: 25px;
+  font-weight: 760;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255,255,255,0.28), transparent 32%),
+    linear-gradient(135deg, rgba(140, 231, 212, 0.42), rgba(154, 174, 255, 0.34));
+  box-shadow:
+    0 0 28px rgba(140, 231, 212, 0.13),
+    inset 0 1px 0 rgba(255,255,255,0.24);
+}
+
+.boot-title {
+  color: rgba(246, 247, 251, 0.94);
+  font-size: 16px;
+  font-weight: 720;
+}
+
+.boot-status {
+  min-height: 16px;
+  color: rgba(205, 216, 231, 0.64);
+  font-size: 12px;
+}
+
+.boot-progress-track {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.boot-progress-bar {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(140, 231, 212, 0.92), rgba(154, 174, 255, 0.92));
+  box-shadow: 0 0 18px rgba(140, 231, 212, 0.24);
+  transition: width 0.24s ease;
+}
+
 .synapse-trigger {
   position: relative;
   width: 42px;
@@ -878,14 +962,14 @@ body::before {
 
 .virtual-keyboard {
   position: fixed;
-  left: 9px;
-  right: 9px;
+  left: 7px;
+  right: 7px;
   bottom: calc(70px + env(safe-area-inset-bottom));
   z-index: 34;
   display: grid;
-  gap: 8px;
-  padding: 9px;
-  border-radius: 19px;
+  gap: 9px;
+  padding: 11px;
+  border-radius: 21px;
   background:
     radial-gradient(circle at 18% 0%, rgba(145, 231, 210, 0.16), transparent 38%),
     radial-gradient(circle at 82% 100%, rgba(154, 174, 255, 0.14), transparent 44%),
@@ -914,7 +998,7 @@ body::before {
 .vk-row {
   display: flex;
   justify-content: center;
-  gap: 6px;
+  gap: 7px;
 }
 
 .vk-drag-handle {
@@ -935,17 +1019,17 @@ body::before {
 }
 
 .vk-row-mid {
-  padding: 0 12px;
+  padding: 0 10px;
 }
 
 .virtual-keyboard button {
   min-width: 0;
-  height: 37px;
+  height: 45px;
   flex: 1;
   border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 13px;
+  border-radius: 15px;
   color: #f6f7fb;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 720;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.045)),
@@ -999,12 +1083,12 @@ body::before {
 
 .vk-return {
   flex: 1.25;
-  font-size: 18px !important;
+  font-size: 20px !important;
 }
 
 .vk-symbol-toggle {
   flex: 1.15;
-  font-size: 12px !important;
+  font-size: 13px !important;
   letter-spacing: 0;
 }
 
@@ -1510,36 +1594,36 @@ body::before {
   }
 
   .virtual-keyboard {
-    left: 8px;
-    right: 8px;
-    bottom: calc(66px + env(safe-area-inset-bottom));
-    gap: 7px;
-    padding: 8px;
-    border-radius: 18px;
+    left: 6px;
+    right: 6px;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    gap: 8px;
+    padding: 10px;
+    border-radius: 20px;
   }
 
   .vk-drag-handle {
-    width: 42px;
-    height: 4px;
+    width: 48px;
+    height: 5px;
   }
 
   .vk-row {
-    gap: 5px;
+    gap: 6px;
   }
 
   .vk-row-mid {
-    padding: 0 8px;
+    padding: 0 7px;
   }
 
   .virtual-keyboard button {
-    height: 34px;
-    border-radius: 11px;
-    font-size: 14px;
+    height: 43px;
+    border-radius: 14px;
+    font-size: 16px;
   }
 
   .vk-space span {
-    width: min(72px, 48%);
-    height: 3px;
+    width: min(88px, 50%);
+    height: 4px;
   }
 
   .face-count-badge {

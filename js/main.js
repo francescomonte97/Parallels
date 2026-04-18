@@ -4,19 +4,25 @@ import { bindSettingsEvents, syncUserProfileInputs } from './settings.js';
 import { bindEvents } from './handlers.js';
 import { initInstallPrompt } from './pwa.js';
 import { loadLongTermMemory, getRelationshipState } from './services.js';
+import { preloadStartupModels, hideBootScreen } from './boot.js';
 
 async function init() {
-  restoreActiveUserProfile();
-  syncUserProfileInputs();
-  restoreRelationshipTheme();
+  try {
+    restoreActiveUserProfile();
+    syncUserProfileInputs();
+    restoreRelationshipTheme();
 
-  await loadLongTermMemory();
+    await preloadStartupModels();
+    await loadLongTermMemory();
 
-  bindEvents();
-  bindSettingsEvents();
-  initInstallPrompt();
+    bindEvents();
+    bindSettingsEvents();
+    initInstallPrompt();
 
-  applyRelationshipTheme(getRelationshipState());
+    applyRelationshipTheme(getRelationshipState());
+  } finally {
+    hideBootScreen();
+  }
 }
 
 init();
