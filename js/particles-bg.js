@@ -35,6 +35,16 @@
     requested: false
   };
 
+  const shake = {
+    x: 0,
+    y: 0,
+    energy: 0,
+    flash: 0,
+    lastMagnitude: 0,
+    lastTrigger: 0,
+    motionAttached: false
+  };
+
   let width = 0;
   let height = 0;
   let pixelRatio = 1;
@@ -232,11 +242,43 @@
       ctx.fillStyle = scanGlow;
       ctx.fillRect(0, 0, width, height);
     }
+
+    if (shake.flash > 0.01) {
+      const alpha = shake.flash * (mobileMode ? 0.13 : 0.10);
+      const shakeGlow = ctx.createRadialGradient(width * 0.5, height * 0.5, 0, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
+      shakeGlow.addColorStop(0, rgba(theme.accent, alpha));
+      shakeGlow.addColorStop(0.36, rgba(theme.reply, alpha * 0.52));
+      shakeGlow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = shakeGlow;
+      ctx.fillRect(0, 0, width, height);
+
+      const scanY = height * (0.24 + (Date.now() % 760) / 760 * 0.52);
+      const lineGradient = ctx.createLinearGradient(0, scanY, width, scanY);
+      lineGradient.addColorStop(0, rgba(theme.accent, 0));
+      lineGradient.addColorStop(0.5, rgba(theme.accent, alpha * 0.82));
+      lineGradient.addColorStop(1, rgba(theme.accent, 0));
+      ctx.strokeStyle = lineGradient;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(width * 0.12, scanY);
+      ctx.lineTo(width * 0.88, scanY);
+      ctx.stroke();
+    }
   }
 
   function updateTilt() {
     tilt.x += (tilt.targetX - tilt.x) * 0.055;
     tilt.y += (tilt.targetY - tilt.y) * 0.055;
+  }
+
+  function updateShake() {
+    shake.energy *= 0.90;
+    shake.flash *= 0.88;
+    shake.x *= 0.84;
+    shake.y *= 0.84;
+
+    if (shake.energy < 0.002) shake.energy = 0;
+    if (shake.flash < 0.002) shake.flash = 0;
   }
 
   function drawParticleConnections(pulseAlpha, thinkingLineBoost) {
@@ -284,12 +326,12 @@
 
             const distance = Math.sqrt(distanceSq);
 
-            const opacity = (1 - distance / maxDistance) * (0.24 + thinkingLineBoost + pulseAlpha * (mobileMode ? 0.30 : 0.36));
+            const opacity = (1 - distance / maxDistance) * (0.24 + thinkingLineBoost + pulseAlpha * (mobileMode ? 0.30 : 0.36) + shake.flash * 0.12);
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.strokeStyle = rgba(theme.line, opacity);
-            ctx.lineWidth = thinking ? 0.9 : mobileMode ? 0.78 : 0.75;
+            ctx.lineWidth = thinking ? 0.9 : mobileMode ? 0.78 + shake.flash * 0.18 : 0.75;
             ctx.stroke();
             drawnConnections += 1;
           }
@@ -305,17 +347,20 @@
     }
 
     updateTilt();
+    updateShake();
     drawBackground();
     const pulseAlpha = drawPulse();
     const scanWave = scanning ? (0.5 + Math.sin(Date.now() / 150) * 0.5) : 0;
     const thinkingBoost = thinking ? (mobileMode ? 1.28 : 1.32) : scanning ? (mobileMode ? 1.12 + scanWave * 0.11 : 1.14 + scanWave * 0.12) : 1;
     const thinkingLineBoost = thinking ? (mobileMode ? 0.09 : 0.10) : scanning ? (mobileMode ? 0.048 + scanWave * 0.07 : 0.05 + scanWave * 0.08) : 0;
     const tiltForce = mobileMode ? 0.18 : 0.08;
+    const shakeForce = mobileMode ? 2.4 : 1.5;
 
     for (const particle of particles) {
       particle.phase += 0.015;
-      particle.x += particle.vx * thinkingBoost + Math.cos(particle.phase) * (thinking ? 0.045 : 0.012) + tilt.x * tiltForce;
-      particle.y += particle.vy * thinkingBoost + Math.sin(particle.phase) * (thinking ? 0.045 : 0.012) + tilt.y * tiltForce;
+      const shakeWave = Math.sin(particle.phase * 2.2 + Date.now() / 52) * shake.energy;
+      particle.x += particle.vx * thinkingBoost + Math.cos(particle.phase) * (thinking ? 0.045 : 0.012) + tilt.x * tiltForce + (shake.x + shakeWave * 0.32) * shakeForce;
+      particle.y += particle.vy * thinkingBoost + Math.sin(particle.phase) * (thinking ? 0.045 : 0.012) + tilt.y * tiltForce + (shake.y - shakeWave * 0.22) * shakeForce;
 
       if (particle.x < -8) particle.x = width + 8;
       if (particle.x > width + 8) particle.x = -8;
@@ -356,7 +401,7 @@
 
       ctx.beginPath();
       ctx.arc(a.x, a.y, a.size, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(theme.particle, clamp(a.alpha + pulseAlpha * 0.32 + (thinking ? 0.08 : 0) + (scanning ? scanWave * 0.10 : 0), 0, 0.82));
+      ctx.fillStyle = rgba(theme.particle, clamp(a.alpha + pulseAlpha * 0.32 + (thinking ? 0.08 : 0) + (scanning ? scanWave * 0.10 : 0) + shake.flash * 0.16, 0, 0.88));
       ctx.fill();
     }
 
@@ -403,20 +448,70 @@
     orientationListenerAttached = true;
   }
 
+  function triggerShakeEffect(power = 1, x = 0, y = 0) {
+    const safePower = clamp(power, 0.35, 1.6);
+    const length = Math.sqrt(x * x + y * y) || 1;
+    shake.x = clamp(x / length, -1, 1) * safePower;
+    shake.y = clamp(y / length, -1, 1) * safePower;
+    shake.energy = clamp(shake.energy + safePower * 0.34, 0, 1.05);
+    shake.flash = clamp(shake.flash + safePower * 0.58, 0, 1);
+    createPulse('reply');
+  }
+
+  function handleDeviceMotion(event) {
+    if (!mobileMode) return;
+
+    const acceleration = event.accelerationIncludingGravity || event.acceleration;
+    if (!acceleration) return;
+
+    const x = Number(acceleration.x) || 0;
+    const y = Number(acceleration.y) || 0;
+    const z = Number(acceleration.z) || 0;
+    const magnitude = Math.sqrt(x * x + y * y + z * z);
+    const delta = Math.abs(magnitude - shake.lastMagnitude);
+    shake.lastMagnitude = magnitude;
+
+    const now = Date.now();
+    const threshold = 10.8;
+    if (delta < threshold || now - shake.lastTrigger < 560) return;
+
+    shake.lastTrigger = now;
+    triggerShakeEffect(clamp(delta / 18, 0.45, 1.35), x, y);
+  }
+
+  function attachMotionListener() {
+    if (shake.motionAttached || !('DeviceMotionEvent' in window)) return;
+    window.addEventListener('devicemotion', handleDeviceMotion, { passive: true });
+    shake.motionAttached = true;
+  }
+
   async function requestTiltAccess() {
-    if (tilt.requested || !mobileMode || !('DeviceOrientationEvent' in window)) return;
+    if (tilt.requested || !mobileMode) return;
     tilt.requested = true;
 
-    const permissionRequest = window.DeviceOrientationEvent?.requestPermission;
-    if (typeof permissionRequest !== 'function') {
+    const orientationPermissionRequest = window.DeviceOrientationEvent?.requestPermission;
+    const motionPermissionRequest = window.DeviceMotionEvent?.requestPermission;
+
+    if (typeof orientationPermissionRequest !== 'function' && typeof motionPermissionRequest !== 'function') {
       attachOrientationListener();
+      attachMotionListener();
       return;
     }
 
     try {
-      const permission = await permissionRequest.call(window.DeviceOrientationEvent);
-      if (permission === 'granted') {
+      const orientationPermission = typeof orientationPermissionRequest === 'function'
+        ? await orientationPermissionRequest.call(window.DeviceOrientationEvent)
+        : 'granted';
+      const motionPermission = typeof motionPermissionRequest === 'function'
+        ? await motionPermissionRequest.call(window.DeviceMotionEvent)
+        : 'granted';
+
+      if (orientationPermission === 'granted') {
         attachOrientationListener();
+      }
+
+      if (motionPermission === 'granted') {
+        attachMotionListener();
       }
     } catch (err) {
       tilt.targetX = 0;

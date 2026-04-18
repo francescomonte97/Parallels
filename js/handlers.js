@@ -46,6 +46,7 @@ import {
 
 let pendingImageFile = null;
 let pendingImagePreviewUrl = '';
+let pendingImagePreviewGenerated = false;
 let pendingImageUI = null;
 let pendingImageNaturalWidth = 0;
 let pendingImageNaturalHeight = 0;
@@ -1201,16 +1202,64 @@ function updatePendingImageUI() {
   }
 }
 
-function setPendingImage(file) {
+async function createSafeImagePreviewUrl(file) {
+  if (!file || !String(file.type || '').startsWith('image/')) {
+    return {
+      url: file ? URL.createObjectURL(file) : '',
+      generated: false
+    };
+  }
+
+  try {
+    const drawable = await loadDrawableImageFromFile(file);
+    const longestSide = Math.max(drawable.width, drawable.height);
+    const scale = longestSide > 720 ? 720 / longestSide : 1;
+    const targetWidth = Math.max(1, Math.round(drawable.width * scale));
+    const targetHeight = Math.max(1, Math.round(drawable.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) {
+      drawable.close?.();
+      return { url: URL.createObjectURL(file), generated: false };
+    }
+
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    ctx.drawImage(drawable.source, 0, 0, targetWidth, targetHeight);
+    drawable.close?.();
+
+    if (isCanvasMostlyBlack(canvas)) {
+      return { url: URL.createObjectURL(file), generated: false };
+    }
+
+    return {
+      url: canvas.toDataURL('image/jpeg', 0.86),
+      generated: true
+    };
+  } catch (err) {
+    console.warn('Preview normalizzata non disponibile, uso originale:', err);
+    return {
+      url: URL.createObjectURL(file),
+      generated: false
+    };
+  }
+}
+
+async function setPendingImage(file) {
   if (!file) return;
 
-  if (pendingImagePreviewUrl) {
+  if (pendingImagePreviewUrl && !pendingImagePreviewGenerated) {
     URL.revokeObjectURL(pendingImagePreviewUrl);
   }
 
   resetAudioComposerState();
+  const preview = await createSafeImagePreviewUrl(file);
   pendingImageFile = file;
-  pendingImagePreviewUrl = URL.createObjectURL(file);
+  pendingImagePreviewUrl = preview.url;
+  pendingImagePreviewGenerated = preview.generated;
   pendingImageNaturalWidth = 0;
   pendingImageNaturalHeight = 0;
   updatePendingImageUI();
@@ -1249,14 +1298,84 @@ function dataURLToFile(dataUrl, filename = 'immagine.jpg') {
   return new File([bytes], filename, { type: mime, lastModified: Date.now() });
 }
 
+async function loadDrawableImageFromFile(file) {
+  if (window.createImageBitmap) {
+    try {
+      const bitmap = await createImageBitmap(file, {
+        imageOrientation: 'from-image'
+      });
+
+      if (bitmap?.width && bitmap?.height) {
+        return {
+          source: bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+          close: () => bitmap.close?.()
+        };
+      }
+    } catch (err) {
+      console.warn('createImageBitmap non disponibile per questa immagine, provo fallback:', err);
+    }
+  }
+
+  const image = await loadImageElementFromBlob(file);
+  const width = Number(image.naturalWidth || image.width || 0);
+  const height = Number(image.naturalHeight || image.height || 0);
+
+  return {
+    source: image,
+    width,
+    height,
+    close: () => {}
+  };
+}
+
+function isCanvasMostlyBlack(canvas) {
+  const width = Number(canvas?.width || 0);
+  const height = Number(canvas?.height || 0);
+  if (!width || !height) return true;
+
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 24;
+  sampleCanvas.height = 24;
+
+  const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+  if (!sampleCtx) return false;
+
+  sampleCtx.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+  let data;
+  try {
+    data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+  } catch {
+    return false;
+  }
+
+  let darkPixels = 0;
+  let visiblePixels = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3];
+    if (alpha < 8) continue;
+
+    visiblePixels += 1;
+    const luminance = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
+    if (luminance < 8) darkPixels += 1;
+  }
+
+  return visiblePixels > 0 && darkPixels / visiblePixels > 0.985;
+}
+
 async function compressImageForSend(file) {
   if (!file || !String(file.type || '').startsWith('image/')) return file;
   if (String(file.type || '').toLowerCase() === 'image/gif') return file;
 
+  let drawable = null;
+
   try {
-    const image = await loadImageElementFromBlob(file);
-    const width = Number(image.naturalWidth || image.width || 0);
-    const height = Number(image.naturalHeight || image.height || 0);
+    drawable = await loadDrawableImageFromFile(file);
+    const width = Number(drawable.width || 0);
+    const height = Number(drawable.height || 0);
 
     if (!width || !height) return file;
 
@@ -1272,10 +1391,17 @@ async function compressImageForSend(file) {
     canvas.width = targetWidth;
     canvas.height = targetHeight;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return file;
 
-    ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    ctx.drawImage(drawable.source, 0, 0, targetWidth, targetHeight);
+
+    if (isCanvasMostlyBlack(canvas)) {
+      console.warn('Compressione immagine sospetta: canvas quasi nero, uso originale.');
+      return file;
+    }
 
     const blob = await new Promise(resolve => {
       if (canvas.toBlob) {
@@ -1291,6 +1417,7 @@ async function compressImageForSend(file) {
     });
 
     if (!blob) return file;
+    if (blob.size < 1024 && file.size > 1024) return file;
 
     return new File(
       [blob],
@@ -1300,16 +1427,19 @@ async function compressImageForSend(file) {
   } catch (err) {
     console.warn('Compressione immagine fallita, uso originale:', err);
     return file;
+  } finally {
+    drawable?.close?.();
   }
 }
 
 function clearPendingImage() {
-  if (pendingImagePreviewUrl) {
+  if (pendingImagePreviewUrl && !pendingImagePreviewGenerated) {
     URL.revokeObjectURL(pendingImagePreviewUrl);
   }
 
   pendingImageFile = null;
   pendingImagePreviewUrl = '';
+  pendingImagePreviewGenerated = false;
   pendingImageNaturalWidth = 0;
   pendingImageNaturalHeight = 0;
   pendingFaceAnalysisPromise = null;
@@ -1902,7 +2032,7 @@ export async function handleImageMessage(file) {
       size: file.size
     });
 
-    setPendingImage(file);
+    await setPendingImage(file);
     showAudioHint('Immagine pronta. Ora puoi scrivere un messaggio e inviare tutto insieme.');
     if (!isMobileViewport()) {
       dom.userInput.focus();

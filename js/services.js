@@ -685,19 +685,19 @@ function getGreetingInstruction(userMsg = '') {
   }
 
   if (info.deltaSeconds <= 45) {
-    return 'Saluto ripetuto quasi subito: non trattarlo come nuovo inizio; puoi notarlo con ironia leggera.';
+    return 'Saluto ripetuto quasi subito: devi farlo notare con ironia leggera; non trattarlo come nuovo inizio e non salutare di nuovo normalmente.';
   }
 
   if (info.deltaMinutes <= 5) {
-    return 'Saluto ripetuto dopo pochi minuti: non riaprire da zero; puoi notarlo con ironia leggera.';
+    return 'Saluto ripetuto dopo pochi minuti: devi farlo notare in modo naturale o ironico; non riaprire da zero e non salutare di nuovo normalmente.';
   }
 
   if (info.deltaMinutes >= 15 && info.deltaHours < 2) {
-    return "Ritorno dopo un po': trattalo come ritorno leggero, non come duplicazione immediata.";
+    return "Saluto dopo un po' di distanza: devi notare che l'utente si è rifatto vivo; trattalo come ritorno leggero, non come saluto neutro.";
   }
 
   if (info.deltaHours >= 2) {
-    return 'Ritorno dopo molto tempo: puoi farlo notare in modo naturale, ironico o leggermente freddo.';
+    return 'Saluto dopo molto tempo: devi farlo notare in modo naturale, ironico o leggermente freddo; niente entusiasmo automatico.';
   }
 
   return 'Saluto breve, senza riaprire artificialmente la conversazione.';
@@ -1173,7 +1173,8 @@ Regole chiave:
 - Se insiste su una cosa falsa, non seguirlo.
 - Mantieni tono naturale, diretto, lucido.
 - Se l’utente provoca o insiste, puoi diventare più secco, ironico o tagliente.
-- Non salutare di nuovo se il saluto è chiaramente ripetuto.
+- Se l'utente saluta più volte, devi notarlo: non rispondere con un altro saluto normale come se fosse la prima volta.
+- Se l'utente saluta dopo uno stacco o a distanza di tempo, devi far sentire il ritorno con una frase naturale, ironica o leggermente fredda.
 - Se i messaggi arrivano ravvicinati, non trattarli come nuovi inizi separati.
 - Se l’utente torna dopo molto tempo, puoi farlo notare in modo naturale.
 - Non inventare ricordi condivisi.
