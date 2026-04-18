@@ -106,6 +106,72 @@ body::before {
 .bg-grid {
   display: none;
 }
+
+.install-app-notice {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  top: calc(10px + env(safe-area-inset-top));
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 10px 10px 13px;
+  border-radius: 17px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(145, 231, 210, 0.16), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.040)),
+    rgba(7, 13, 25, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px) saturate(1.18);
+  transform: translateY(-12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.25s var(--motion-ease), opacity 0.2s ease;
+}
+
+.install-app-notice.is-visible {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.install-app-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.install-app-copy strong {
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.install-app-copy span {
+  font-size: 12px;
+  color: rgba(246, 247, 251, 0.68);
+}
+
+.install-app-notice button {
+  min-width: 82px;
+  height: 36px;
+  border: 1px solid rgba(140, 231, 212, 0.30);
+  border-radius: 13px;
+  color: #f7fbff;
+  font-weight: 760;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.13), transparent 44%),
+    linear-gradient(135deg, #3b7370, #5163b2);
+  box-shadow:
+    0 12px 26px rgba(83, 101, 181, 0.18),
+    0 6px 18px rgba(63, 111, 114, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
 /* BACKGROUND TECH */
 .bg-grid {
   position: fixed;
@@ -784,16 +850,26 @@ body::before {
 .text-input {
   width: 100%;
   min-height: 22px;
-  max-height: 72px;
+  max-height: 58px;
   border: none;
   outline: none;
   resize: none;
   background: transparent;
   color: var(--text);
   font-size: 16px;
-  line-height: 1.35;
+  line-height: 20px;
   overflow-y: auto;
   font-family: inherit;
+  display: block;
+  padding: 1px 0;
+  scrollbar-width: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  -webkit-overflow-scrolling: touch;
+}
+
+.text-input::-webkit-scrollbar {
+  display: none;
 }
 
 .text-input::placeholder {

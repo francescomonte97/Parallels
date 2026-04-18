@@ -6,6 +6,8 @@ export const dom = {
   exportMemoryBtn: document.getElementById('export-memory-btn'),
   importMemoryBtn: document.getElementById('import-memory-btn'),
   importMemoryInput: document.getElementById('import-memory-input'),
+  installAppNotice: document.getElementById('install-app-notice'),
+  installAppBtn: document.getElementById('install-app-btn'),
 
   chatBox: document.getElementById('chat-box'),
   composer: document.querySelector('.composer'),

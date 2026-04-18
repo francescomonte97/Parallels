@@ -3,7 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#070b14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="LIPU" />
   <title>LIPU</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./lipu-profile.png" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,6 +16,14 @@
   <div class="bg-orb orb-1"></div>
   <div class="bg-orb orb-2"></div>
   <div class="bg-grid"></div>
+
+  <div id="install-app-notice" class="install-app-notice hidden" role="dialog" aria-live="polite" aria-label="Scarica app LIPU">
+    <div class="install-app-copy">
+      <strong>LIPU sul telefono</strong>
+      <span>Aprila come app, senza browser.</span>
+    </div>
+    <button id="install-app-btn" type="button">Scarica</button>
+  </div>
 
   <div class="app">
     <header class="header">
