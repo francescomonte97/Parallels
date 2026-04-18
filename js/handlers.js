@@ -1231,7 +1231,8 @@ async function createSafeImagePreviewUrl(file) {
     ctx.drawImage(drawable.source, 0, 0, targetWidth, targetHeight);
     drawable.close?.();
 
-    if (isCanvasMostlyBlack(canvas)) {
+    if (isCanvasLikelyBlank(canvas)) {
+      console.warn('Preview normalizzata sospetta: canvas quasi vuota, uso originale.');
       return { url: URL.createObjectURL(file), generated: false };
     }
 
@@ -1330,17 +1331,17 @@ async function loadDrawableImageFromFile(file) {
   };
 }
 
-function isCanvasMostlyBlack(canvas) {
+function getCanvasSampleStats(canvas) {
   const width = Number(canvas?.width || 0);
   const height = Number(canvas?.height || 0);
-  if (!width || !height) return true;
+  if (!width || !height) return null;
 
   const sampleCanvas = document.createElement('canvas');
   sampleCanvas.width = 24;
   sampleCanvas.height = 24;
 
   const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
-  if (!sampleCtx) return false;
+  if (!sampleCtx) return null;
 
   sampleCtx.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
@@ -1348,11 +1349,14 @@ function isCanvasMostlyBlack(canvas) {
   try {
     data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
   } catch {
-    return false;
+    return null;
   }
 
   let darkPixels = 0;
+  let brightPixels = 0;
   let visiblePixels = 0;
+  let luminanceSum = 0;
+  let luminanceSqSum = 0;
 
   for (let i = 0; i < data.length; i += 4) {
     const alpha = data[i + 3];
@@ -1360,10 +1364,34 @@ function isCanvasMostlyBlack(canvas) {
 
     visiblePixels += 1;
     const luminance = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
+    luminanceSum += luminance;
+    luminanceSqSum += luminance * luminance;
     if (luminance < 8) darkPixels += 1;
+    if (luminance > 247) brightPixels += 1;
   }
 
-  return visiblePixels > 0 && darkPixels / visiblePixels > 0.985;
+  if (!visiblePixels) return null;
+
+  const average = luminanceSum / visiblePixels;
+  const variance = luminanceSqSum / visiblePixels - average * average;
+
+  return {
+    average,
+    variance: Math.max(0, variance),
+    darkRatio: darkPixels / visiblePixels,
+    brightRatio: brightPixels / visiblePixels
+  };
+}
+
+function isCanvasLikelyBlank(canvas) {
+  const stats = getCanvasSampleStats(canvas);
+  if (!stats) return true;
+
+  return (
+    stats.darkRatio > 0.985 ||
+    stats.brightRatio > 0.985 ||
+    (stats.variance < 2 && (stats.average < 12 || stats.average > 243))
+  );
 }
 
 async function compressImageForSend(file) {
@@ -1398,8 +1426,8 @@ async function compressImageForSend(file) {
     ctx.fillRect(0, 0, targetWidth, targetHeight);
     ctx.drawImage(drawable.source, 0, 0, targetWidth, targetHeight);
 
-    if (isCanvasMostlyBlack(canvas)) {
-      console.warn('Compressione immagine sospetta: canvas quasi nero, uso originale.');
+    if (isCanvasLikelyBlank(canvas)) {
+      console.warn('Compressione immagine sospetta: canvas quasi vuota, uso originale.');
       return file;
     }
 
