@@ -76,14 +76,14 @@
       </div>
 
       <div class="composer-center">
-        <input
-          type="text"
+        <textarea
           id="user-input"
           class="text-input"
           placeholder="Scrivi un messaggio..."
           autocomplete="off"
           inputmode="none"
-        />
+          rows="1"
+        ></textarea>
 
         <div id="image-preview-container" class="image-preview-container hidden">
           <div class="image-preview-wrap">
@@ -133,6 +133,7 @@
     </div>
 
     <div id="virtual-keyboard" class="virtual-keyboard hidden" aria-label="Tastiera virtuale">
+      <div class="vk-drag-handle" aria-hidden="true"></div>
       <div class="vk-row">
         <button type="button" data-key="q">q</button>
         <button type="button" data-key="w">w</button>

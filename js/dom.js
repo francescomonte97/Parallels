@@ -8,6 +8,7 @@ export const dom = {
   importMemoryInput: document.getElementById('import-memory-input'),
 
   chatBox: document.getElementById('chat-box'),
+  composer: document.querySelector('.composer'),
   composerCenter: document.querySelector('.composer-center'),
   userInput: document.getElementById('user-input'),
   sendBtn: document.getElementById('send-btn'),

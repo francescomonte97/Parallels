@@ -77,6 +77,18 @@ let pendingFaceLowConfidenceBlocked = false;
 let pendingFaceLowConfidenceAlertedAnalysisId = 0;
 let pendingFaceAnalysisFailed = false;
 let virtualKeyboardShift = false;
+let virtualKeyboardDrag = null;
+let virtualKeyboardAccentTimer = null;
+let virtualKeyboardSuppressClick = false;
+let virtualKeyboardAccentPopover = null;
+
+const VIRTUAL_KEYBOARD_ACCENTS = {
+  a: ['à', 'á', 'â', 'ä'],
+  e: ['è', 'é', 'ê', 'ë'],
+  i: ['ì', 'í', 'î', 'ï'],
+  o: ['ò', 'ó', 'ô', 'ö'],
+  u: ['ù', 'ú', 'û', 'ü']
+};
 
 function getImagePreviewElements() {
   return {
@@ -113,6 +125,7 @@ function setComposerActionsOpen(open) {
   if (!dom.composerActionsBtn || !dom.composerActionsMenu) return;
 
   const isOpen = Boolean(open);
+  dom.composer?.classList.toggle('actions-open', isOpen);
   dom.composerActionsBtn.setAttribute('aria-expanded', String(isOpen));
   dom.composerActionsBtn.classList.toggle('is-open', isOpen);
   dom.composerActionsMenu.classList.toggle('hidden', !isOpen);
@@ -128,6 +141,13 @@ function closeComposerActions() {
   setComposerActionsOpen(false);
 }
 
+function autoResizeUserInput() {
+  if (!dom.userInput) return;
+  dom.userInput.style.height = 'auto';
+  const nextHeight = Math.min(dom.userInput.scrollHeight, 72);
+  dom.userInput.style.height = `${Math.max(22, nextHeight)}px`;
+}
+
 function isVirtualKeyboardAvailable() {
   return isMobileViewport() && dom.virtualKeyboard;
 }
@@ -137,6 +157,9 @@ function setVirtualKeyboardOpen(open) {
   dom.virtualKeyboard.classList.toggle('hidden', !open);
   dom.virtualKeyboard.classList.toggle('is-open', Boolean(open));
   dom.userInput?.classList.toggle('uses-virtual-keyboard', Boolean(open));
+  if (!open) {
+    closeVirtualKeyboardAccents();
+  }
 }
 
 function openVirtualKeyboard() {
@@ -175,13 +198,120 @@ function updateVirtualKeyboardCase() {
 function appendToInput(value = '') {
   if (!dom.userInput || !value) return;
   dom.userInput.value += value;
+  autoResizeUserInput();
   dom.userInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function backspaceInput() {
   if (!dom.userInput) return;
   dom.userInput.value = dom.userInput.value.slice(0, -1);
+  autoResizeUserInput();
   dom.userInput.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function closeVirtualKeyboardAccents() {
+  window.clearTimeout(virtualKeyboardAccentTimer);
+  virtualKeyboardAccentTimer = null;
+  virtualKeyboardAccentPopover?.remove();
+  virtualKeyboardAccentPopover = null;
+}
+
+function showVirtualKeyboardAccents(button, key = '') {
+  const accents = VIRTUAL_KEYBOARD_ACCENTS[String(key || '').toLowerCase()];
+  if (!button || !accents?.length) return;
+
+  closeVirtualKeyboardAccents();
+  virtualKeyboardSuppressClick = true;
+
+  const rect = button.getBoundingClientRect();
+  const popover = document.createElement('div');
+  popover.className = 'vk-accent-popover';
+
+  accents.forEach(accent => {
+    const accentButton = document.createElement('button');
+    accentButton.type = 'button';
+    accentButton.textContent = virtualKeyboardShift ? accent.toUpperCase() : accent;
+    accentButton.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      appendToInput(accentButton.textContent);
+      if (virtualKeyboardShift) {
+        virtualKeyboardShift = false;
+        dom.virtualKeyboard?.classList.remove('has-shift');
+        updateVirtualKeyboardCase();
+      }
+      closeVirtualKeyboardAccents();
+      virtualKeyboardSuppressClick = false;
+    });
+    popover.appendChild(accentButton);
+  });
+
+  document.body.appendChild(popover);
+  const popoverRect = popover.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - popoverRect.width - 8, rect.left + rect.width / 2 - popoverRect.width / 2));
+  const top = Math.max(8, rect.top - popoverRect.height - 8);
+
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  virtualKeyboardAccentPopover = popover;
+}
+
+function beginVirtualKeyboardAccent(button) {
+  const key = button?.dataset?.key || '';
+  if (!VIRTUAL_KEYBOARD_ACCENTS[key.toLowerCase()]) return;
+
+  window.clearTimeout(virtualKeyboardAccentTimer);
+  virtualKeyboardAccentTimer = window.setTimeout(() => {
+    showVirtualKeyboardAccents(button, key);
+  }, 420);
+}
+
+function cancelVirtualKeyboardAccentTimer() {
+  window.clearTimeout(virtualKeyboardAccentTimer);
+  virtualKeyboardAccentTimer = null;
+}
+
+function startVirtualKeyboardDrag(event) {
+  if (!isVirtualKeyboardAvailable() || !dom.virtualKeyboard) return;
+  if (event.target.closest('button')) return;
+
+  const rect = dom.virtualKeyboard.getBoundingClientRect();
+  virtualKeyboardDrag = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+    width: rect.width,
+    height: rect.height
+  };
+
+  dom.virtualKeyboard.classList.add('is-dragging');
+  dom.virtualKeyboard.style.left = `${rect.left}px`;
+  dom.virtualKeyboard.style.top = `${rect.top}px`;
+  dom.virtualKeyboard.style.right = 'auto';
+  dom.virtualKeyboard.style.bottom = 'auto';
+  dom.virtualKeyboard.style.width = `${rect.width}px`;
+  dom.virtualKeyboard.style.transform = 'none';
+  dom.virtualKeyboard.setPointerCapture?.(event.pointerId);
+}
+
+function moveVirtualKeyboardDrag(event) {
+  if (!virtualKeyboardDrag || !dom.virtualKeyboard) return;
+
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - virtualKeyboardDrag.width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - virtualKeyboardDrag.height - margin);
+  const left = Math.max(margin, Math.min(maxLeft, event.clientX - virtualKeyboardDrag.offsetX));
+  const top = Math.max(margin, Math.min(maxTop, event.clientY - virtualKeyboardDrag.offsetY));
+
+  dom.virtualKeyboard.style.left = `${left}px`;
+  dom.virtualKeyboard.style.top = `${top}px`;
+}
+
+function endVirtualKeyboardDrag(event) {
+  if (!virtualKeyboardDrag || !dom.virtualKeyboard) return;
+  dom.virtualKeyboard.releasePointerCapture?.(virtualKeyboardDrag.pointerId || event.pointerId);
+  dom.virtualKeyboard.classList.remove('is-dragging');
+  virtualKeyboardDrag = null;
 }
 
 async function handleVirtualKeyboardAction(action = '') {
@@ -1536,6 +1666,7 @@ export async function handleTextMessage() {
     }
 
     dom.userInput.value = '';
+    autoResizeUserInput();
     updateSendButtonState();
 
     renderLIPULoadingMessage(
@@ -1727,6 +1858,9 @@ export function bindEvents() {
   dom.composerActionsBtn?.addEventListener('click', e => {
     e.preventDefault();
     e.stopPropagation();
+    if (dom.composerActionsBtn?.getAttribute('aria-expanded') !== 'true') {
+      closeVirtualKeyboard();
+    }
     toggleComposerActions();
   });
 
@@ -1742,6 +1876,10 @@ export function bindEvents() {
       !dom.composerCenter?.contains(e.target)
     ) {
       closeVirtualKeyboard();
+    }
+
+    if (!e.target.closest('.vk-accent-popover')) {
+      closeVirtualKeyboardAccents();
     }
   });
 
@@ -1804,14 +1942,39 @@ export function bindEvents() {
   });
 
   dom.userInput.addEventListener('input', updateSendButtonState);
+  dom.userInput.addEventListener('input', autoResizeUserInput);
 
   dom.virtualKeyboard?.addEventListener('pointerdown', e => {
     e.preventDefault();
+    startVirtualKeyboardDrag(e);
+    const button = e.target.closest('button');
+    if (button) {
+      beginVirtualKeyboardAccent(button);
+    }
+  });
+
+  dom.virtualKeyboard?.addEventListener('pointermove', e => {
+    moveVirtualKeyboardDrag(e);
+  });
+
+  dom.virtualKeyboard?.addEventListener('pointerup', e => {
+    cancelVirtualKeyboardAccentTimer();
+    endVirtualKeyboardDrag(e);
+  });
+
+  dom.virtualKeyboard?.addEventListener('pointercancel', e => {
+    cancelVirtualKeyboardAccentTimer();
+    endVirtualKeyboardDrag(e);
   });
 
   dom.virtualKeyboard?.addEventListener('click', async e => {
     const button = e.target.closest('button');
     if (!button) return;
+
+    if (virtualKeyboardSuppressClick) {
+      virtualKeyboardSuppressClick = false;
+      return;
+    }
 
     const action = button.dataset.action || '';
     const key = button.dataset.key || '';
