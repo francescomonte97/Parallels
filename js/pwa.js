@@ -61,9 +61,14 @@ async function handleInstallClick() {
 
 export function initInstallPrompt() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./service-worker.js').catch(err => {
-      console.warn('Service worker non registrato:', err);
-    });
+    navigator.serviceWorker
+      .register('./service-worker.js')
+      .then(registration => {
+        registration.update?.();
+      })
+      .catch(err => {
+        console.warn('Service worker non registrato:', err);
+      });
   }
 
   window.addEventListener('beforeinstallprompt', event => {

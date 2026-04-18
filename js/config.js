@@ -19,7 +19,7 @@ export const STORAGE_KEYS = {
 
 
 export const DEFAULT_REPLY_MODE = 'text';
-export const DEFAULT_PROFILE_ID = 'tommi';
+export const DEFAULT_PROFILE_ID = 'none';
 
 export const CLAUDE_MAIN_MODEL = 'claude-sonnet-4-6';
 export const CLAUDE_SUMMARY_MODEL = 'claude-haiku-4-5-20251001';

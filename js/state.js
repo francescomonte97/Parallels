@@ -13,7 +13,8 @@ function safeReadJSON(key, fallback) {
 }
 
 function isValidProfileId(profileId) {
-  return Boolean(profileId && LIPU_USER_PROFILES[profileId]);
+  const profile = profileId ? LIPU_USER_PROFILES[profileId] : null;
+  return Boolean(profile && !profile.locked);
 }
 
 function isValidReplyMode(mode) {

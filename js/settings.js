@@ -20,6 +20,7 @@ let settingsCloseTimer = null;
 let synapseCloseTimer = null;
 let selectedParticleTheme = null;
 let particleThemeControlsBound = false;
+let pendingAdditionalFacePerson = null;
 
 const FACE_API_MODELS_PATH = './models';
 const DEFAULT_PARTICLE_THEME_ID = 'default';
@@ -648,6 +649,27 @@ function averagePairwiseSimilarity(embeddings = []) {
   };
 }
 
+function averageEmbeddings(embeddings = []) {
+  const valid = Array.isArray(embeddings)
+    ? embeddings
+        .map(normalizeEmbeddingVector)
+        .filter(item => item.length)
+    : [];
+
+  if (!valid.length) return [];
+
+  const length = valid[0].length;
+  const sums = Array.from({ length }, () => 0);
+
+  valid.forEach(embedding => {
+    embedding.forEach((value, index) => {
+      sums[index] += Number(value || 0);
+    });
+  });
+
+  return normalizeEmbeddingVector(sums.map(value => value / valid.length));
+}
+
 function computeEmbeddingStats(embeddings = []) {
   if (!Array.isArray(embeddings) || embeddings.length < 2) return null;
 
@@ -709,18 +731,61 @@ function renderKnownFacesPeopleList(database = null) {
 
         const label = document.createElement('span');
         label.className = 'face-person-label';
+        const nameText = document.createElement('span');
+        nameText.className = 'face-person-name';
+        nameText.textContent = person.label || person.id;
+
+        const statsText = document.createElement('span');
+        statsText.className = 'face-person-stats';
         const stats = computeEmbeddingStats(person.embeddings || []);
         if (stats) {
-          label.textContent = `${person.label || person.id} · μ ${stats.avgPercent}% · σ ${stats.stdPercent}%`;
+          statsText.textContent = `μ ${stats.avgPercent}% · σ ${stats.stdPercent}%`;
         } else {
-          label.textContent = `${person.label || person.id} · ${Array.isArray(person.embeddings) ? person.embeddings.length : 0}`;
+          statsText.textContent = `${Array.isArray(person.embeddings) ? person.embeddings.length : 0} embeddings`;
         }
 
+        label.appendChild(nameText);
+        label.appendChild(statsText);
         item.appendChild(label);
 
         if (isUserCreated) {
           const actions = document.createElement('div');
           actions.className = 'face-person-actions';
+
+          const galleryBtnInline = document.createElement('button');
+          galleryBtnInline.type = 'button';
+          galleryBtnInline.className = 'face-icon-btn face-add-gallery-btn';
+          galleryBtnInline.setAttribute('aria-label', `Aggiungi foto da galleria per ${person.label || person.id}`);
+          galleryBtnInline.title = 'Aggiungi da galleria';
+          galleryBtnInline.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 5h14v14H5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              <path d="m7 16 4-4 3 3 2-2 3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M15.5 8.5h.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+            </svg>
+          `;
+
+          galleryBtnInline.addEventListener('click', e => {
+            e.stopPropagation();
+            openAdditionalFacePicker(person, 'gallery');
+          });
+
+          const cameraBtnInline = document.createElement('button');
+          cameraBtnInline.type = 'button';
+          cameraBtnInline.className = 'face-icon-btn face-add-camera-btn';
+          cameraBtnInline.setAttribute('aria-label', `Scatta foto per ${person.label || person.id}`);
+          cameraBtnInline.title = 'Scatta foto';
+          cameraBtnInline.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M8.5 7 10 5h4l1.5 2H19a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              <circle cx="12" cy="13" r="3.2" stroke="currentColor" stroke-width="1.8"/>
+            </svg>
+          `;
+
+          cameraBtnInline.addEventListener('click', e => {
+            e.stopPropagation();
+            openAdditionalFacePicker(person, 'camera');
+          });
 
           const exportBtnInline = document.createElement('button');
           exportBtnInline.type = 'button';
@@ -773,6 +838,8 @@ function renderKnownFacesPeopleList(database = null) {
             }
           });
 
+          actions.appendChild(galleryBtnInline);
+          actions.appendChild(cameraBtnInline);
           actions.appendChild(exportBtnInline);
           actions.appendChild(deleteBtnInline);
           item.appendChild(actions);
@@ -1066,9 +1133,11 @@ function renderEnrollmentPreview(results = []) {
   });
 }
 
-async function generateFaceEmbeddingsForSelectedPerson(files = []) {
+async function generateFaceEmbeddingsForSelectedPerson(files = [], options = {}) {
   const { nameInput } = getEnrollDom();
-  const personName = String(nameInput?.value || dom.enrollFaceSelect?.value || '').trim();
+  const personName = String(
+    options.personName || nameInput?.value || dom.enrollFaceSelect?.value || ''
+  ).trim();
   const personId = slugifyPersonId(personName);
 
   if (!personId || !personName) {
@@ -1078,10 +1147,13 @@ async function generateFaceEmbeddingsForSelectedPerson(files = []) {
   const inputFiles = Array.from(files).filter(Boolean);
   const database = await loadKnownFacesData();
   const thresholds = database?.thresholds || {};
-  const minPhotos = Math.max(5, Number(thresholds?.minEnrollmentPhotos) || 5);
+  const minPhotos = options.allowSinglePhoto
+    ? 1
+    : Math.max(5, Number(thresholds?.minEnrollmentPhotos) || 5);
   // 🔥 stricter thresholds for higher quality embeddings
   const minSimilarity = Math.max(0.9, Number(thresholds?.minEnrollmentSimilarity) || 0.9);
   const minPairSimilarity = Math.max(0.85, Number(thresholds?.minEnrollmentPairSimilarity) || 0.85);
+  const minExistingSimilarity = Math.max(0.86, Number(thresholds?.minEnrollmentPairSimilarity) || 0.86);
 
   if (inputFiles.length < minPhotos) {
     throw new Error(`Servono almeno ${minPhotos} foto.`);
@@ -1091,6 +1163,7 @@ async function generateFaceEmbeddingsForSelectedPerson(files = []) {
   if (!person) {
     throw new Error('Impossibile creare o trovare la persona nel database');
   }
+  const existingEmbeddings = Array.isArray(person.embeddings) ? person.embeddings.slice() : [];
 
   const faceapi = window.faceapi;
   if (!faceapi) {
@@ -1174,10 +1247,25 @@ async function generateFaceEmbeddingsForSelectedPerson(files = []) {
   }
 
   const similarity = averagePairwiseSimilarity(newEmbeddings);
-  if (similarity.average < minSimilarity || similarity.min < minPairSimilarity) {
+  if (
+    newEmbeddings.length > 1 &&
+    (similarity.average < minSimilarity || similarity.min < minPairSimilarity)
+  ) {
     throw new Error(
       `Foto non coerenti · μ ${similarity.average.toFixed(2)} · min ${similarity.min.toFixed(2)}`
     );
+  }
+
+  if (options.requireExistingSimilarity && existingEmbeddings.length) {
+    const prototype = averageEmbeddings(existingEmbeddings);
+    const weakMatch = newEmbeddings.find(embedding => {
+      const score = cosineSimilarity(embedding, prototype);
+      return score < minExistingSimilarity;
+    });
+
+    if (weakMatch) {
+      throw new Error('La foto non sembra appartenere a questa persona.');
+    }
   }
 
   person.embeddings = Array.isArray(person.embeddings) ? person.embeddings : [];
@@ -1195,6 +1283,56 @@ async function generateFaceEmbeddingsForSelectedPerson(files = []) {
     rejectedFiles,
     similarity
   };
+}
+
+function openAdditionalFacePicker(person, source = 'gallery') {
+  const safePerson = {
+    id: String(person?.id || '').trim(),
+    label: String(person?.label || person?.id || '').trim()
+  };
+
+  if (!safePerson.id || !safePerson.label) {
+    setEnrollFaceStatus('Persona non valida.');
+    return;
+  }
+
+  pendingAdditionalFacePerson = safePerson;
+
+  if (source === 'camera') {
+    dom.enrollFaceAddCameraInput?.click();
+    return;
+  }
+
+  dom.enrollFaceAddGalleryInput?.click();
+}
+
+async function addEmbeddingsToExistingPerson(files = []) {
+  const target = pendingAdditionalFacePerson;
+  if (!target?.label) {
+    throw new Error('Seleziona una persona dalla lista.');
+  }
+
+  const inputFiles = Array.from(files).filter(Boolean);
+  if (!inputFiles.length) return null;
+
+  clearEnrollFacePreview();
+  setEnrollFaceStatus(`Aggiungo immagini a ${target.label}...`);
+
+  const result = await generateFaceEmbeddingsForSelectedPerson(inputFiles, {
+    personName: target.label,
+    allowSinglePhoto: true,
+    requireExistingSimilarity: true
+  });
+
+  setEnrollFaceStatus(
+    `${result.personLabel} · +${result.added} → ${result.total}`
+  );
+
+  if (dom.enrollFaceExportBtn) {
+    dom.enrollFaceExportBtn.disabled = false;
+  }
+
+  return result;
 }
 
 function deleteKnownFacePerson(personId = '') {
@@ -1283,6 +1421,32 @@ function bindFaceEnrollmentEvents() {
       event.target.value = '';
     }
   });
+
+  const handleAdditionalInputChange = async event => {
+    const files = event.target.files;
+    if (!files?.length) return;
+
+    dom.enrollFaceGenerateBtn.disabled = true;
+    dom.enrollFaceExportBtn.disabled = true;
+    if (deleteBtn) deleteBtn.disabled = true;
+
+    try {
+      await addEmbeddingsToExistingPerson(files);
+      dom.enrollFaceExportBtn.disabled = false;
+    } catch (err) {
+      console.error('Errore aggiunta embeddings:', err);
+      setEnrollFaceStatus(err?.message || 'Errore durante l’aggiunta delle immagini.');
+      resetEnrollmentProgress();
+    } finally {
+      dom.enrollFaceGenerateBtn.disabled = false;
+      if (deleteBtn) deleteBtn.disabled = false;
+      pendingAdditionalFacePerson = null;
+      event.target.value = '';
+    }
+  };
+
+  dom.enrollFaceAddGalleryInput?.addEventListener('change', handleAdditionalInputChange);
+  dom.enrollFaceAddCameraInput?.addEventListener('change', handleAdditionalInputChange);
 
   deleteBtn?.addEventListener('click', async () => {
     try {
@@ -1455,7 +1619,7 @@ export function bindSettingsEvents() {
     input.addEventListener('change', async e => {
       const nextProfileId = e.target.value;
 
-      if (!LIPU_USER_PROFILES[nextProfileId]) return;
+      if (!LIPU_USER_PROFILES[nextProfileId] || LIPU_USER_PROFILES[nextProfileId].locked) return;
       if (nextProfileId === state.activeUserProfileId) return;
 
       const confirmed = await confirmProfileChange();

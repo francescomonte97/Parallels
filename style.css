@@ -966,6 +966,7 @@ body::before {
 }
 
 .virtual-keyboard.has-shift [data-action="shift"],
+.virtual-keyboard.has-numbers [data-action="symbols"],
 .vk-special,
 .vk-return {
   color: #f7fbff;
@@ -999,6 +1000,12 @@ body::before {
 .vk-return {
   flex: 1.25;
   font-size: 18px !important;
+}
+
+.vk-symbol-toggle {
+  flex: 1.15;
+  font-size: 12px !important;
+  letter-spacing: 0;
 }
 
 .vk-accent-popover {
@@ -1958,6 +1965,34 @@ body::before {
   cursor: pointer;
 }
 
+.settings-option > span:first-of-type {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-option.locked-option {
+  cursor: not-allowed;
+  opacity: 0.66;
+  background: rgba(255,255,255,0.026);
+}
+
+.settings-option.locked-option input {
+  opacity: 0.35;
+}
+
+.coming-soon-pill {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(140, 231, 212, 0.16);
+  background: rgba(140, 231, 212, 0.07);
+  color: rgba(213, 246, 239, 0.7);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 
 body.modal-open .app {
   filter: blur(10px);
@@ -2621,21 +2656,42 @@ body {
 
 .face-person-label {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.face-person-name,
+.face-person-stats {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.face-person-name {
+  color: rgba(244, 248, 255, 0.92);
+  font-weight: 650;
+}
+
+.face-person-stats {
+  color: rgba(186, 198, 214, 0.52);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
 .face-person-actions {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
   flex-shrink: 0;
 }
 
 .face-icon-btn {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2653,8 +2709,8 @@ body {
 }
 
 .face-icon-btn svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   display: block;
 }
 
@@ -2669,6 +2725,26 @@ body {
   border-color: rgba(255, 109, 95, 0.28);
   color: #ffd6d1;
   background: rgba(255, 109, 95, 0.09);
+}
+
+.face-add-gallery-btn {
+  color: rgba(178, 229, 255, 0.84);
+}
+
+.face-add-camera-btn {
+  color: rgba(196, 241, 224, 0.84);
+}
+
+.face-add-gallery-btn:hover {
+  border-color: rgba(114, 205, 255, 0.24);
+  color: #dff5ff;
+  background: rgba(114, 205, 255, 0.075);
+}
+
+.face-add-camera-btn:hover {
+  border-color: rgba(140, 231, 212, 0.24);
+  color: #e3fff8;
+  background: rgba(140, 231, 212, 0.075);
 }
 
 #enroll-face-people-list .settings-action-btn[data-quality]::after {

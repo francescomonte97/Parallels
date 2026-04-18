@@ -53,6 +53,8 @@ export const dom = {
 
   enrollFaceNameInput: document.getElementById('enroll-face-name-input'),
   enrollFaceInput: document.getElementById('enroll-face-input'),
+  enrollFaceAddGalleryInput: document.getElementById('enroll-face-add-gallery-input'),
+  enrollFaceAddCameraInput: document.getElementById('enroll-face-add-camera-input'),
   enrollFaceGenerateBtn: document.getElementById('enroll-face-generate-btn'),
   enrollFaceDeleteBtn: document.getElementById('enroll-face-delete-btn'),
   enrollFaceExportBtn: document.getElementById('enroll-face-export-btn'),

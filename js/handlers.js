@@ -77,10 +77,25 @@ let pendingFaceLowConfidenceBlocked = false;
 let pendingFaceLowConfidenceAlertedAnalysisId = 0;
 let pendingFaceAnalysisFailed = false;
 let virtualKeyboardShift = false;
+let virtualKeyboardMode = 'letters';
 let virtualKeyboardDrag = null;
 let virtualKeyboardAccentTimer = null;
 let virtualKeyboardSuppressClick = false;
 let virtualKeyboardAccentPopover = null;
+
+const VIRTUAL_KEYBOARD_LETTER_ROWS = [
+  ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+  ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+  ['z', 'x', 'c', 'v', 'b', 'n', 'm'],
+  [',', '.', '?']
+];
+
+const VIRTUAL_KEYBOARD_NUMBER_ROWS = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['@', '#', '€', '&', '-', '+', '(', ')', '/'],
+  ['*', "'", '"', ':', ';', '!', '='],
+  [',', '.', '?']
+];
 
 const VIRTUAL_KEYBOARD_ACCENTS = {
   a: ['à', 'á', 'â', 'ä'],
@@ -189,10 +204,49 @@ function updateVirtualKeyboardCase() {
 
   dom.virtualKeyboard.querySelectorAll('[data-key]').forEach(button => {
     const value = button.dataset.key || '';
-    if (value.length === 1 && /[a-zàèéìòù]/i.test(value)) {
+    if (virtualKeyboardMode === 'letters' && value.length === 1 && /[a-zàèéìòù]/i.test(value)) {
       button.textContent = virtualKeyboardShift ? value.toUpperCase() : value.toLowerCase();
     }
   });
+}
+
+function setVirtualKeyboardButtonKey(button, key = '') {
+  if (!button) return;
+  button.dataset.key = key;
+  button.textContent = key;
+}
+
+function updateVirtualKeyboardLayout() {
+  if (!dom.virtualKeyboard) return;
+
+  const rows = Array.from(dom.virtualKeyboard.querySelectorAll('.vk-row'));
+  const layout = virtualKeyboardMode === 'numbers'
+    ? VIRTUAL_KEYBOARD_NUMBER_ROWS
+    : VIRTUAL_KEYBOARD_LETTER_ROWS;
+
+  rows.forEach((row, rowIndex) => {
+    const keyButtons = Array.from(row.querySelectorAll('button[data-key]'));
+    keyButtons.forEach((button, index) => {
+      const nextKey = layout[rowIndex]?.[index];
+      if (nextKey) {
+        setVirtualKeyboardButtonKey(button, nextKey);
+      }
+    });
+  });
+
+  const shiftButton = dom.virtualKeyboard.querySelector('[data-action="shift"]');
+  const symbolButton = dom.virtualKeyboard.querySelector('[data-action="symbols"]');
+
+  if (shiftButton) {
+    shiftButton.textContent = virtualKeyboardMode === 'numbers' ? 'ABC' : 'Aa';
+  }
+
+  if (symbolButton) {
+    symbolButton.textContent = virtualKeyboardMode === 'numbers' ? 'ABC' : '123';
+  }
+
+  dom.virtualKeyboard.classList.toggle('has-numbers', virtualKeyboardMode === 'numbers');
+  updateVirtualKeyboardCase();
 }
 
 function appendToInput(value = '') {
@@ -330,7 +384,23 @@ async function handleVirtualKeyboardAction(action = '') {
     return;
   }
 
+  if (action === 'symbols') {
+    virtualKeyboardMode = virtualKeyboardMode === 'numbers' ? 'letters' : 'numbers';
+    virtualKeyboardShift = false;
+    dom.virtualKeyboard?.classList.remove('has-shift');
+    updateVirtualKeyboardLayout();
+    return;
+  }
+
   if (action === 'shift') {
+    if (virtualKeyboardMode === 'numbers') {
+      virtualKeyboardMode = 'letters';
+      virtualKeyboardShift = false;
+      dom.virtualKeyboard?.classList.remove('has-shift');
+      updateVirtualKeyboardLayout();
+      return;
+    }
+
     virtualKeyboardShift = !virtualKeyboardShift;
     dom.virtualKeyboard?.classList.toggle('has-shift', virtualKeyboardShift);
     updateVirtualKeyboardCase();
@@ -1850,6 +1920,7 @@ export function bindEvents() {
   clearFacePreviewUI();
   updateSendButtonState();
   syncMobileKeyboardMode();
+  updateVirtualKeyboardLayout();
   updateVirtualKeyboardCase();
 
   window.addEventListener('resize', syncMobileKeyboardMode);

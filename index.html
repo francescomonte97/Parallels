@@ -182,6 +182,7 @@
         <button type="button" class="vk-special" data-action="backspace">⌫</button>
       </div>
       <div class="vk-row">
+        <button type="button" class="vk-special vk-symbol-toggle" data-action="symbols">123</button>
         <button type="button" data-key=",">,</button>
         <button type="button" data-key=".">.</button>
         <button type="button" class="vk-space" data-action="space" aria-label="Spazio">
@@ -269,6 +270,11 @@
           <div class="settings-label">Impersonificazione</div>
 
           <label class="settings-option">
+            <input type="radio" name="lipu-user-profile" value="none" />
+            <span>-</span>
+          </label>
+
+          <label class="settings-option">
             <input type="radio" name="lipu-user-profile" value="tommi" />
             <span>Nicholas Tommasi</span>
           </label>
@@ -278,24 +284,28 @@
             <span>Luca Zara</span>
           </label>
 
-          <label class="settings-option">
-            <input type="radio" name="lipu-user-profile" value="fez" />
+          <label class="settings-option locked-option">
+            <input type="radio" name="lipu-user-profile" value="fez" disabled />
             <span>Fabio Moretto</span>
+            <span class="coming-soon-pill">Coming soon</span>
           </label>
 
-          <label class="settings-option">
-            <input type="radio" name="lipu-user-profile" value="bes" />
+          <label class="settings-option locked-option">
+            <input type="radio" name="lipu-user-profile" value="bes" disabled />
             <span>Giuseppe Toscano</span>
+            <span class="coming-soon-pill">Coming soon</span>
           </label>
 
-          <label class="settings-option">
-            <input type="radio" name="lipu-user-profile" value="mossino" />
+          <label class="settings-option locked-option">
+            <input type="radio" name="lipu-user-profile" value="mossino" disabled />
             <span>Gabriele Mossino</span>
+            <span class="coming-soon-pill">Coming soon</span>
           </label>
 
-          <label class="settings-option">
-            <input type="radio" name="lipu-user-profile" value="frec" />
+          <label class="settings-option locked-option">
+            <input type="radio" name="lipu-user-profile" value="frec" disabled />
             <span>Francesco Monteforte</span>
+            <span class="coming-soon-pill">Coming soon</span>
           </label>
         </div>
 
@@ -375,6 +385,20 @@
             type="file"
             accept="image/*"
             multiple
+            hidden
+          />
+          <input
+            id="enroll-face-add-gallery-input"
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+          />
+          <input
+            id="enroll-face-add-camera-input"
+            type="file"
+            accept="image/*"
+            capture="environment"
             hidden
           />
 
