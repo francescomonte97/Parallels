@@ -12,7 +12,8 @@ function readKnownFacesOverride() {
 import { dom } from './dom.js';
 import {
   WORKER_BASE_URL,
-  MAX_CONVERSATION_HISTORY_MESSAGES
+  MAX_CONVERSATION_HISTORY_MESSAGES,
+  STORAGE_KEYS
 } from './config.js';
 import { state, saveWorkingMemory, saveConversationHistory } from './state.js';
 import {
@@ -1574,9 +1575,65 @@ function trimConversationHistory() {
   saveConversationHistory();
 }
 
+function extractDefaultUserName(text = '') {
+  const raw = normalizeString(text).trim();
+  if (!raw) return '';
+
+  const match = raw.match(
+    /(?:mi chiamo|io mi chiamo|sono|io sono|il mio nome (?:è|e')|chiamami)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ' -]{1,38})/i
+  );
+
+  if (!match) return '';
+
+  const candidate = String(match[1] || '')
+    .split(/[,.!?;:\n]/)[0]
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!candidate || candidate.length < 2 || candidate.length > 40) return '';
+
+  const lower = candidate.toLowerCase();
+  const blocked = new Set([
+    'qui',
+    'qua',
+    'felice',
+    'triste',
+    'stanco',
+    'stanca',
+    'arrabbiato',
+    'arrabbiata',
+    'al mare',
+    'a casa',
+    'in macchina'
+  ]);
+
+  if (blocked.has(lower)) return '';
+
+  return candidate
+    .split(' ')
+    .map(part => part ? part.charAt(0).toUpperCase() + part.slice(1) : '')
+    .join(' ');
+}
+
+function rememberDefaultUserNameFromMessage(role, content) {
+  if (normalizeRole(role) !== 'user') return;
+  if (state.activeUserProfileId !== 'none') return;
+
+  const name = extractDefaultUserName(content);
+  if (!name) return;
+
+  try {
+    localStorage.setItem(STORAGE_KEYS.defaultUserName, name);
+  } catch (err) {
+    console.warn('Salvataggio nome utente default fallito:', err);
+  }
+}
+
 function saveTextToMemory(role, content) {
   const safeContent = normalizeString(content).trim();
   if (!safeContent) return;
+
+  rememberDefaultUserNameFromMessage(role, safeContent);
 
   const message = {
     role: normalizeRole(role),

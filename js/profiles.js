@@ -7,6 +7,7 @@ export const LIPU_USER_PROFILES = {
 Profilo utente: nessuna impersonificazione.
 L'utente non è Tommi, Lussu, Fez, Bes, Mossino o Francesco.
 Se l'utente dice il proprio nome, ricordalo nella conversazione e usalo naturalmente.
+Il nome del profilo default può essere salvato in localStorage: se è disponibile, usalo come riferimento dell'utente.
 Se non conosci il nome, non inventarlo.
 Costruisci il rapporto da ciò che l'utente dice ora e dalla memoria conversazionale disponibile.
 `.trim()

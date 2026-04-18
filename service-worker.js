@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lipu-app-v11';
+const CACHE_NAME = 'lipu-app-v13';
 const APP_SHELL = [
   './',
   './index.html',

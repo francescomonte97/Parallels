@@ -14,7 +14,8 @@ export const STORAGE_KEYS = {
   pinnedSummary: 'lipu_pinned_summary',
   conversationHistory: 'lipu_conversation_history',
   lastProfileChange: 'lipu_last_profile_change',
-  particleTheme: 'lipu_particle_theme'
+  particleTheme: 'lipu_particle_theme',
+  defaultUserName: 'lipu_default_user_name'
 };
 
 

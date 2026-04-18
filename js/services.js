@@ -628,11 +628,20 @@ function getRecentConversationContext(limit = 6, excludeLastUserMessage = true) 
 
   if (!recent.length) return '';
 
-  return recent
+  const storedName = state.activeUserProfileId === 'none' ? getStoredDefaultUserName() : '';
+  const identityLine = storedName
+    ? `Identità persistente utente default: l'utente si chiama ${storedName}. Non dimenticarlo nei turni successivi.`
+    : '';
+
+  const transcript = recent
     .map(msg => {
       const roleLabel = msg.role === 'user' ? 'Utente' : 'LIPU';
       return `${roleLabel}: ${clampText(msg.content, 160)}`;
     })
+    .join('\n');
+
+  return [identityLine, transcript]
+    .filter(Boolean)
     .join('\n')
     .slice(0, 700);
 }
@@ -852,6 +861,42 @@ function detectMemoryIntent(userMsg = '') {
 function getResolvedActiveMemoryPersonId() {
   const activeProfile = getActiveUserProfile();
   return activeProfile?.memoryPersonId || state.activeUserProfileId || '';
+}
+
+function getStoredDefaultUserName() {
+  try {
+    return String(localStorage.getItem(STORAGE_KEYS.defaultUserName) || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40);
+  } catch {
+    return '';
+  }
+}
+
+function getActiveUserProfileContext() {
+  const activeProfile = getActiveUserProfile();
+  const baseContext = String(activeProfile?.context || '').trim();
+
+  if (state.activeUserProfileId !== 'none') {
+    return baseContext;
+  }
+
+  const storedName = getStoredDefaultUserName();
+  const nameContext = storedName
+    ? `IMPORTANTE: l'utente default si chiama ${storedName}. Questo nome è salvato nel localStorage e va mantenuto stabile anche dopo molti messaggi. Puoi chiamarlo per nome quando naturale.`
+    : "Nome dell'utente default non ancora salvato: se l'utente dice come si chiama, ricordalo.";
+
+  return [nameContext, baseContext].filter(Boolean).join('\n');
+}
+
+function getPersistentIdentityContext() {
+  if (state.activeUserProfileId !== 'none') return '';
+
+  const storedName = getStoredDefaultUserName();
+  if (!storedName) return '';
+
+  return `Identità persistente: l'utente del profilo default è ${storedName}. Non sostituirlo con altri profili e non perdere questo nome nei turni successivi.`;
 }
 
 function buildRetrievalSeed(
@@ -1146,6 +1191,7 @@ function buildSystemText(
     : '';
 
   const compactMemory = [
+    getPersistentIdentityContext(),
     pinnedSummaryContext ? `Ancora: ${String(pinnedSummaryContext).trim().slice(0, 220)}` : '',
     intermediateSummaryContext
       ? `Fase centrale: ${String(intermediateSummaryContext).trim().slice(0, 240)}`
@@ -1263,7 +1309,7 @@ export async function getLIPUResponse(userMsg) {
     const aiRelState = await analyzeUserRelationalState(userMsg);
     const relationshipState = updateRelationshipStateWithAI(aiRelState);
     const relationshipInstructions = getRelationshipInstructions(relationshipState);
-    const userProfileContext = clampText(getActiveUserProfile()?.context || '', 320);
+    const userProfileContext = clampText(getActiveUserProfileContext(), 420);
     const recentConversationContext = getRecentConversationContext(6, true);
     const sessionSummaryContext = getSessionSummaryContext();
     const pinnedSummaryContext = getPinnedSummaryContext();
