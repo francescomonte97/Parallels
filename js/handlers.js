@@ -51,6 +51,7 @@ let pendingImagePreviewGenerated = false;
 let pendingImageUI = null;
 let pendingImageNaturalWidth = 0;
 let pendingImageNaturalHeight = 0;
+let pendingImageRecognitionStatus = '';
 
 let pendingFaceDetections = [];
 let pendingFaceAnalysisId = 0;
@@ -59,9 +60,24 @@ const KNOWN_FACES_JSON_PATH = './js/known-faces.json';
 const FACE_API_MODELS_PATH = './models';
 const LIPU_SELF_MIN_SCORE = 0.96;
 const KNOWN_FACE_MIN_SCORE = 0.94;
+const UNCERTAIN_FACE_MIN_SCORE = 0.88;
 const IMAGE_SEND_MAX_DIMENSION = 1600;
 const IMAGE_SEND_JPEG_QUALITY = 0.82;
-const FACE_ANALYSIS_TIMEOUT_MS = 2800;
+const FACE_ANALYSIS_TIMEOUT_MS = 2200;
+const MOBILE_FACE_PREVIEW_MAX_DIMENSION = 720;
+const DESKTOP_FACE_PREVIEW_MAX_DIMENSION = 720;
+const MOBILE_FACE_DETECTOR_INPUT_SIZE = 224;
+const MOBILE_FACE_FALLBACK_DETECTOR_INPUT_SIZE = 320;
+const DESKTOP_FACE_DETECTOR_INPUT_SIZE = 512;
+const MOBILE_FACE_EMBEDDING_INPUT_SIZE = 160;
+const MOBILE_FACE_FALLBACK_EMBEDDING_INPUT_SIZE = 224;
+const DESKTOP_FACE_EMBEDDING_INPUT_SIZE = 224;
+const MOBILE_FACE_SCORE_THRESHOLD = 0.35;
+const MOBILE_FACE_FALLBACK_SCORE_THRESHOLD = 0.25;
+const DESKTOP_FACE_SCORE_THRESHOLD = 0.25;
+const MOBILE_FACE_MATCH_LIMIT = 2;
+const MOBILE_FACE_FALLBACK_MATCH_LIMIT = 4;
+const DESKTOP_FACE_MATCH_LIMIT = 6;
 
 let knownFacesCache = null;
 
@@ -84,6 +100,7 @@ let virtualKeyboardDrag = null;
 let virtualKeyboardAccentTimer = null;
 let virtualKeyboardSuppressClick = false;
 let virtualKeyboardAccentPopover = null;
+let virtualKeyboardLastTap = null;
 
 const VIRTUAL_KEYBOARD_LETTER_ROWS = [
   ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
@@ -181,8 +198,8 @@ function setVirtualKeyboardOpen(open) {
 
 function openVirtualKeyboard() {
   if (!isVirtualKeyboardAvailable()) return;
-  dom.userInput?.blur();
   setVirtualKeyboardOpen(true);
+  syncVirtualKeyboardAutoShift();
 }
 
 function closeVirtualKeyboard() {
@@ -193,8 +210,10 @@ function syncMobileKeyboardMode() {
   if (!dom.userInput) return;
 
   const useVirtualKeyboard = isVirtualKeyboardAvailable();
-  dom.userInput.readOnly = useVirtualKeyboard;
+  dom.userInput.readOnly = false;
   dom.userInput.setAttribute('inputmode', useVirtualKeyboard ? 'none' : 'text');
+  dom.userInput.setAttribute('virtualkeyboardpolicy', useVirtualKeyboard ? 'manual' : 'auto');
+  dom.userInput.setAttribute('autocapitalize', useVirtualKeyboard ? 'off' : 'sentences');
 
   if (!useVirtualKeyboard) {
     closeVirtualKeyboard();
@@ -210,6 +229,60 @@ function updateVirtualKeyboardCase() {
       button.textContent = virtualKeyboardShift ? value.toUpperCase() : value.toLowerCase();
     }
   });
+}
+
+function keepInputSelectionVisible() {
+  if (!dom.userInput) return;
+
+  try {
+    dom.userInput.focus({ preventScroll: true });
+  } catch {
+    dom.userInput.focus();
+  }
+
+  window.setTimeout(() => {
+    dom.userInput?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, 0);
+}
+
+function pulseVirtualKeyboardButton(button) {
+  if (!button) return;
+  button.classList.remove('is-pressed');
+  void button.offsetWidth;
+  button.classList.add('is-pressed');
+  window.setTimeout(() => button.classList.remove('is-pressed'), 150);
+}
+
+function replaceInputSelection(value = '') {
+  if (!dom.userInput || !value) return;
+
+  const input = dom.userInput;
+  const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
+  const end = Number.isInteger(input.selectionEnd) ? input.selectionEnd : start;
+  input.setRangeText(value, start, end, 'end');
+  keepInputSelectionVisible();
+  autoResizeUserInput();
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  syncVirtualKeyboardAutoShift();
+}
+
+function shouldAutoShiftAfterInput() {
+  if (!dom.userInput || virtualKeyboardMode !== 'letters') return false;
+  const cursor = Number.isInteger(dom.userInput.selectionStart)
+    ? dom.userInput.selectionStart
+    : dom.userInput.value.length;
+  const beforeCursor = dom.userInput.value.slice(0, cursor);
+  return /(^|[.!?]\s+|\n\s*)$/.test(beforeCursor);
+}
+
+function syncVirtualKeyboardAutoShift() {
+  if (!dom.virtualKeyboard || virtualKeyboardMode !== 'letters') return;
+  const shouldShift = shouldAutoShiftAfterInput();
+  if (virtualKeyboardShift === shouldShift) return;
+
+  virtualKeyboardShift = shouldShift;
+  dom.virtualKeyboard.classList.toggle('has-shift', virtualKeyboardShift);
+  updateVirtualKeyboardCase();
 }
 
 function setVirtualKeyboardButtonKey(button, key = '') {
@@ -252,17 +325,26 @@ function updateVirtualKeyboardLayout() {
 }
 
 function appendToInput(value = '') {
-  if (!dom.userInput || !value) return;
-  dom.userInput.value += value;
-  autoResizeUserInput();
-  dom.userInput.dispatchEvent(new Event('input', { bubbles: true }));
+  replaceInputSelection(value);
 }
 
 function backspaceInput() {
   if (!dom.userInput) return;
-  dom.userInput.value = dom.userInput.value.slice(0, -1);
+
+  const input = dom.userInput;
+  const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
+  const end = Number.isInteger(input.selectionEnd) ? input.selectionEnd : start;
+
+  if (start !== end) {
+    input.setRangeText('', start, end, 'end');
+  } else if (start > 0) {
+    input.setRangeText('', start - 1, start, 'end');
+  }
+
+  keepInputSelectionVisible();
   autoResizeUserInput();
-  dom.userInput.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  syncVirtualKeyboardAutoShift();
 }
 
 function closeVirtualKeyboardAccents() {
@@ -290,6 +372,7 @@ function showVirtualKeyboardAccents(button, key = '') {
     accentButton.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
+      pulseVirtualKeyboardButton(accentButton);
       appendToInput(accentButton.textContent);
       if (virtualKeyboardShift) {
         virtualKeyboardShift = false;
@@ -350,6 +433,26 @@ function startVirtualKeyboardDrag(event) {
   dom.virtualKeyboard.setPointerCapture?.(event.pointerId);
 }
 
+function registerVirtualKeyboardTap(event) {
+  virtualKeyboardLastTap = {
+    x: event.clientX,
+    y: event.clientY,
+    time: performance.now()
+  };
+}
+
+function wasVirtualKeyboardTapDragged(event) {
+  if (!virtualKeyboardLastTap) return false;
+
+  const elapsed = performance.now() - virtualKeyboardLastTap.time;
+  const distance = Math.hypot(
+    event.clientX - virtualKeyboardLastTap.x,
+    event.clientY - virtualKeyboardLastTap.y
+  );
+
+  return elapsed > 450 || distance > 12;
+}
+
 function moveVirtualKeyboardDrag(event) {
   if (!virtualKeyboardDrag || !dom.virtualKeyboard) return;
 
@@ -383,6 +486,8 @@ async function handleVirtualKeyboardAction(action = '') {
 
   if (action === 'newline') {
     appendToInput('\n');
+    dom.virtualKeyboard?.classList.add('vk-newline-pop');
+    window.setTimeout(() => dom.virtualKeyboard?.classList.remove('vk-newline-pop'), 180);
     return;
   }
 
@@ -409,8 +514,28 @@ async function handleVirtualKeyboardAction(action = '') {
   }
 }
 
-function getFaceDetectorInputSize() {
-  return isMobileViewport() ? 320 : 512;
+function getFaceDetectorInputSize(highQuality = false) {
+  if (!isMobileViewport()) return DESKTOP_FACE_DETECTOR_INPUT_SIZE;
+  return highQuality ? MOBILE_FACE_FALLBACK_DETECTOR_INPUT_SIZE : MOBILE_FACE_DETECTOR_INPUT_SIZE;
+}
+
+function getFaceEmbeddingInputSize(highQuality = false) {
+  if (!isMobileViewport()) return DESKTOP_FACE_EMBEDDING_INPUT_SIZE;
+  return highQuality ? MOBILE_FACE_FALLBACK_EMBEDDING_INPUT_SIZE : MOBILE_FACE_EMBEDDING_INPUT_SIZE;
+}
+
+function getFaceDetectorScoreThreshold(highQuality = false) {
+  if (!isMobileViewport()) return DESKTOP_FACE_SCORE_THRESHOLD;
+  return highQuality ? MOBILE_FACE_FALLBACK_SCORE_THRESHOLD : MOBILE_FACE_SCORE_THRESHOLD;
+}
+
+function getFaceMatchLimit(highQuality = false) {
+  if (!isMobileViewport()) return DESKTOP_FACE_MATCH_LIMIT;
+  return highQuality ? MOBILE_FACE_FALLBACK_MATCH_LIMIT : MOBILE_FACE_MATCH_LIMIT;
+}
+
+function getFacePreviewMaxDimension() {
+  return isMobileViewport() ? MOBILE_FACE_PREVIEW_MAX_DIMENSION : DESKTOP_FACE_PREVIEW_MAX_DIMENSION;
 }
 
 function setFaceAnalysisStatus(text = '') {
@@ -496,6 +621,35 @@ function hasUncertainKnownFaces() {
     });
 }
 
+function hasRecognizedKnownFaces(matches = pendingFaceMatches) {
+  return (matches || []).some(match => match?.status === 'known');
+}
+
+function updatePendingImageRecognitionIndicator(status = pendingImageRecognitionStatus) {
+  pendingImageRecognitionStatus = status || '';
+  const indicator = pendingImageUI?.recognitionIndicator;
+  if (!indicator) return;
+
+  indicator.classList.remove('is-known', 'is-unrecognized');
+
+  if (!pendingImageRecognitionStatus || !pendingImageFile) {
+    indicator.hidden = true;
+    indicator.setAttribute('aria-label', '');
+    return;
+  }
+
+  indicator.hidden = false;
+
+  if (pendingImageRecognitionStatus === 'known') {
+    indicator.classList.add('is-known');
+    indicator.setAttribute('aria-label', 'Volto riconosciuto');
+    return;
+  }
+
+  indicator.classList.add('is-unrecognized');
+  indicator.setAttribute('aria-label', 'Volto non riconosciuto');
+}
+
 async function waitForFaceMatches(timeout = 2200) {
   if (pendingFaceAnalysisPromise) {
     const completed = await Promise.race([
@@ -540,6 +694,27 @@ async function ensureFaceApiModels() {
 
 
 
+function normalizeKnownFaceThresholds(thresholds = {}) {
+  const known = Math.max(
+    KNOWN_FACE_MIN_SCORE,
+    Number(thresholds?.known) || KNOWN_FACE_MIN_SCORE
+  );
+  const uncertain = Math.min(
+    known,
+    Math.max(
+      UNCERTAIN_FACE_MIN_SCORE,
+      Number(thresholds?.uncertain) || UNCERTAIN_FACE_MIN_SCORE
+    )
+  );
+
+  return {
+    known,
+    uncertain,
+    minMarginKnown: Number(thresholds?.minMarginKnown) || 0.03,
+    minMarginUncertain: Number(thresholds?.minMarginUncertain) || 0.015
+  };
+}
+
 function ensureKnownFacesShape(data) {
   if (!data || typeof data !== 'object') {
     return {
@@ -547,12 +722,7 @@ function ensureKnownFacesShape(data) {
       engine: 'face-api.js',
       descriptorLength: 128,
       metric: 'cosine',
-      thresholds: {
-        known: KNOWN_FACE_MIN_SCORE,
-        uncertain: 0.32,
-        minMarginKnown: 0.03,
-        minMarginUncertain: 0.015
-      },
+      thresholds: normalizeKnownFaceThresholds(),
       people: []
     };
   }
@@ -562,12 +732,7 @@ function ensureKnownFacesShape(data) {
     engine: String(data.engine || 'face-api.js'),
     descriptorLength: Number(data.descriptorLength) || 128,
     metric: String(data.metric || 'cosine'),
-    thresholds: {
-      known: Number(data?.thresholds?.known) || KNOWN_FACE_MIN_SCORE,
-      uncertain: Number(data?.thresholds?.uncertain) || 0.32,
-      minMarginKnown: Number(data?.thresholds?.minMarginKnown) || 0.03,
-      minMarginUncertain: Number(data?.thresholds?.minMarginUncertain) || 0.015
-    },
+    thresholds: normalizeKnownFaceThresholds(data?.thresholds),
     people: Array.isArray(data.people)
       ? data.people.map(person => ({
           id: String(person?.id || '').trim(),
@@ -668,7 +833,8 @@ function buildUnknownMatch(score = 0) {
 }
 
 
-async function generateEmbeddingFromCanvas(faceCanvas) {
+async function generateEmbeddingFromCanvas(faceCanvas, options = {}) {
+  const highQuality = Boolean(options.highQuality);
   const faceapi = window.faceapi;
   if (!faceapi) {
     throw new Error('face-api.js non disponibile nel browser');
@@ -680,8 +846,8 @@ async function generateEmbeddingFromCanvas(faceCanvas) {
     .detectSingleFace(
       faceCanvas,
       new faceapi.TinyFaceDetectorOptions({
-        inputSize: 224,
-        scoreThreshold: 0.3
+        inputSize: getFaceEmbeddingInputSize(highQuality),
+        scoreThreshold: getFaceDetectorScoreThreshold(highQuality)
       })
     )
     .withFaceLandmarks(true)
@@ -695,14 +861,13 @@ async function generateEmbeddingFromCanvas(faceCanvas) {
 }
 
 
-function classifyMatch(score, thresholds, margin = 0) {
-  const knownThreshold = Number(thresholds?.known) || KNOWN_FACE_MIN_SCORE;
-  const uncertainThreshold = Number(thresholds?.uncertain) || 0.32;
-  const minMarginKnown = Number(thresholds?.minMarginKnown) || 0.03;
-  const minMarginUncertain = Number(thresholds?.minMarginUncertain) || 0.015;
+function classifyMatch(score, thresholds) {
+  const normalizedThresholds = normalizeKnownFaceThresholds(thresholds);
+  const knownThreshold = normalizedThresholds.known;
+  const uncertainThreshold = normalizedThresholds.uncertain;
 
-  if (score >= knownThreshold && margin >= minMarginKnown) return 'known';
-  if (score >= uncertainThreshold && margin >= minMarginUncertain) return 'uncertain';
+  if (score > knownThreshold) return 'known';
+  if (score >= uncertainThreshold) return 'uncertain';
   return 'unknown';
 }
 
@@ -757,7 +922,7 @@ async function matchFaceEmbedding(embedding) {
   const best = candidates[0] || null;
   const second = candidates[1] || null;
   const margin = best && second ? best.score - second.score : best ? best.score : 0;
-  const status = best ? classifyMatch(best.score, thresholds, margin) : 'unknown';
+  const status = best ? classifyMatch(best.score, thresholds) : 'unknown';
 
   const topCandidates = candidates.slice(0, 3).map(candidate => ({
     personId: candidate.personId,
@@ -869,6 +1034,8 @@ function clearFacePreviewUI() {
   pendingFaceAnalysisId += 1;
   pendingFaceAnalysisFailed = false;
   pendingFaceLowConfidenceBlocked = false;
+  pendingImageRecognitionStatus = '';
+  updatePendingImageRecognitionIndicator('');
   setParticlesScanning(false);
 
   if (preview) {
@@ -965,6 +1132,102 @@ function renderFaceCrops(sourceImage, detections = [], matches = []) {
   });
 }
 
+function normalizeFaceDetectionResults(results = [], limit = DESKTOP_FACE_MATCH_LIMIT) {
+  return (Array.isArray(results) ? results : [])
+    .map(result => ({
+      box: {
+        xMin: Number(result?.detection?.box?.x || 0),
+        yMin: Number(result?.detection?.box?.y || 0),
+        width: Number(result?.detection?.box?.width || 0),
+        height: Number(result?.detection?.box?.height || 0)
+      },
+      descriptor: Array.isArray(result?.descriptor)
+        ? result.descriptor
+        : result?.descriptor
+        ? Array.from(result.descriptor)
+        : []
+    }))
+    .filter(detection => {
+      const box = detection?.box;
+      if (!box) return false;
+      const { xMin, yMin, width, height } = box;
+      if (![xMin, yMin, width, height].every(Number.isFinite)) return false;
+      if (width <= 0 || height <= 0) return false;
+      if (width < 20 || height < 20) return false;
+      const aspectRatio = width / height;
+      return aspectRatio >= 0.55 && aspectRatio <= 1.8;
+    })
+    .sort((a, b) => {
+      const areaA = (a?.box?.width || 0) * (a?.box?.height || 0);
+      const areaB = (b?.box?.width || 0) * (b?.box?.height || 0);
+      return areaB - areaA;
+    })
+    .slice(0, limit);
+}
+
+async function runFaceRecognitionPass(analysisImage, options = {}) {
+  const highQuality = Boolean(options.highQuality);
+  const faceapi = window.faceapi;
+  const results = await faceapi
+    .detectAllFaces(
+      analysisImage,
+      new faceapi.TinyFaceDetectorOptions({
+        inputSize: getFaceDetectorInputSize(highQuality),
+        scoreThreshold: getFaceDetectorScoreThreshold(highQuality)
+      })
+    )
+    .withFaceLandmarks(true)
+    .withFaceDescriptors();
+
+  const detections = normalizeFaceDetectionResults(results, getFaceMatchLimit(highQuality));
+
+  if (!isMobileViewport()) {
+    console.warn('[DEBUG] face-detect-count:', detections.length);
+    console.warn(
+      '[DEBUG] face-detect-descriptors:',
+      detections.map((d, i) => ({
+        index: i,
+        hasDescriptor: Array.isArray(d?.descriptor) && d.descriptor.length > 0,
+        descriptorLength: Array.isArray(d?.descriptor) ? d.descriptor.length : 0
+      }))
+    );
+  }
+
+  const matches = [];
+
+  for (const detection of detections) {
+    let embedding = normalizeEmbeddingVector(detection?.descriptor || []);
+
+    if (!isMobileViewport()) {
+      console.warn('[DEBUG] before-match', {
+        embeddingLength: embedding.length,
+        hasDescriptor: Array.isArray(detection?.descriptor) && detection.descriptor.length > 0
+      });
+    }
+
+    if (!embedding.length) {
+      const faceCanvas = cropFaceDetectionToCanvas(analysisImage, detection);
+      if (faceCanvas) {
+        embedding = await generateEmbeddingFromCanvas(faceCanvas, { highQuality });
+      }
+    }
+
+    if (!embedding.length) {
+      matches.push({
+        label: 'Sconosciuto',
+        status: 'unknown',
+        score: 0
+      });
+      continue;
+    }
+
+    const match = await matchFaceEmbedding(embedding);
+    matches.push(match);
+  }
+
+  return { detections, matches };
+}
+
 async function analyzePendingImageFaces(previewUrl) {
   const analysisId = ++pendingFaceAnalysisId;
   const { container, preview, badge, crops } = getImagePreviewElements();
@@ -995,104 +1258,27 @@ async function analyzePendingImageFaces(previewUrl) {
 
     await ensureFaceApiModels();
 
-    const results = await faceapi
-      .detectAllFaces(
-        analysisImage,
-        new faceapi.TinyFaceDetectorOptions({
-          inputSize: getFaceDetectorInputSize(),
-          scoreThreshold: 0.25
-        })
-      )
-      .withFaceLandmarks(true)
-      .withFaceDescriptors();
+    let recognition = await runFaceRecognitionPass(analysisImage, { highQuality: false });
 
     if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
 
-    pendingFaceDetections = (Array.isArray(results) ? results : [])
-      .map(result => ({
-        box: {
-          xMin: Number(result?.detection?.box?.x || 0),
-          yMin: Number(result?.detection?.box?.y || 0),
-          width: Number(result?.detection?.box?.width || 0),
-          height: Number(result?.detection?.box?.height || 0)
-        },
-        descriptor: Array.isArray(result?.descriptor)
-          ? result.descriptor
-          : result?.descriptor
-          ? Array.from(result.descriptor)
-          : []
-      }))
-      .filter(detection => {
-        const box = detection?.box;
-        if (!box) return false;
-        const { xMin, yMin, width, height } = box;
-        if (![xMin, yMin, width, height].every(Number.isFinite)) return false;
-        if (width <= 0 || height <= 0) return false;
-        if (width < 20 || height < 20) return false;
-        const aspectRatio = width / height;
-        return aspectRatio >= 0.55 && aspectRatio <= 1.8;
-      })
-      .sort((a, b) => {
-        const areaA = (a?.box?.width || 0) * (a?.box?.height || 0);
-        const areaB = (b?.box?.width || 0) * (b?.box?.height || 0);
-        return areaB - areaA;
-      });
-
-      console.warn('[DEBUG] face-detect-count:', pendingFaceDetections.length);
-
-console.warn(
-  '[DEBUG] face-detect-descriptors:',
-  pendingFaceDetections.map((d, i) => ({
-    index: i,
-    hasDescriptor: Array.isArray(d?.descriptor) && d.descriptor.length > 0,
-    descriptorLength: Array.isArray(d?.descriptor) ? d.descriptor.length : 0
-  }))
-);
-
-    const matches = [];
-
-    for (const detection of pendingFaceDetections) {
-      let embedding = normalizeEmbeddingVector(detection?.descriptor || []);
-
-console.warn('[DEBUG] before-match', {
-  embeddingLength: embedding.length,
-  hasDescriptor: Array.isArray(detection?.descriptor) && detection.descriptor.length > 0
-});
-
-      if (!embedding.length) {
-        const faceCanvas = cropFaceDetectionToCanvas(analysisImage, detection);
-        if (faceCanvas) {
-          embedding = await generateEmbeddingFromCanvas(faceCanvas);
-        }
-      }
-
-      if (!embedding.length) {
-        matches.push({
-          label: 'Sconosciuto',
-          status: 'unknown',
-          score: 0
-        });
-        continue;
-      }
-
-      const match = await matchFaceEmbedding(embedding);
-      matches.push(match);
+    if (isMobileViewport() && !hasRecognizedKnownFaces(recognition.matches)) {
+      setFaceAnalysisStatus('Verifica volto...');
+      recognition = await runFaceRecognitionPass(analysisImage, { highQuality: true });
     }
 
     if (!isCurrentPendingPreview(previewUrl) || analysisId !== pendingFaceAnalysisId) return;
 
-    pendingFaceMatches = matches;
+    pendingFaceDetections = recognition.detections;
+    pendingFaceMatches = recognition.matches;
     pendingFaceLowConfidenceBlocked = hasUncertainKnownFaces();
     pendingFaceAnalysisFailed = false;
+    updatePendingImageRecognitionIndicator(hasRecognizedKnownFaces(recognition.matches) ? 'known' : 'unrecognized');
     updateFaceCountBadge(pendingFaceDetections.length);
-    renderFaceCrops(analysisImage, pendingFaceDetections, matches);
-
-    if (
-      pendingFaceLowConfidenceBlocked &&
-      pendingFaceLowConfidenceAlertedAnalysisId !== analysisId
-    ) {
-      pendingFaceLowConfidenceAlertedAnalysisId = analysisId;
-      window.alert('Foto non inviata: volto non confermato.');
+    if (isMobileViewport()) {
+      crops.innerHTML = '';
+    } else {
+      renderFaceCrops(analysisImage, pendingFaceDetections, recognition.matches);
     }
   } catch (err) {
     console.error('Errore analyzePendingImageFaces:', err);
@@ -1103,6 +1289,7 @@ console.warn('[DEBUG] before-match', {
     pendingFaceMatches = [];
     pendingFaceLowConfidenceBlocked = false;
     pendingFaceAnalysisFailed = true;
+    updatePendingImageRecognitionIndicator('unrecognized');
     setFaceAnalysisStatus('');
     crops.innerHTML = '';
   } finally {
@@ -1159,6 +1346,12 @@ function ensurePendingImageUI() {
   removeBtn.style.display = 'grid';
   removeBtn.style.placeItems = 'center';
 
+  const recognitionIndicator = document.createElement('span');
+  recognitionIndicator.className = 'pending-image-recognition-dot';
+  recognitionIndicator.hidden = true;
+  recognitionIndicator.setAttribute('role', 'status');
+  recognitionIndicator.setAttribute('aria-label', '');
+
   removeBtn.addEventListener('click', () => {
     clearPendingImage();
     dom.userInput?.focus();
@@ -1166,6 +1359,7 @@ function ensurePendingImageUI() {
 
   wrap.appendChild(preview);
   wrap.appendChild(label);
+  wrap.appendChild(recognitionIndicator);
   wrap.appendChild(removeBtn);
   composerCenter.insertBefore(wrap, dom.userInput);
 
@@ -1173,6 +1367,7 @@ function ensurePendingImageUI() {
     wrap,
     preview,
     label,
+    recognitionIndicator,
     removeBtn
   };
 
@@ -1189,6 +1384,7 @@ function updatePendingImageUI() {
     ui.wrap.style.display = 'inline-flex';
     pendingFaceLowConfidenceBlocked = false;
     pendingFaceLowConfidenceAlertedAnalysisId = 0;
+    updatePendingImageRecognitionIndicator('');
     pendingFaceAnalysisPromise = analyzePendingImageFaces(pendingImagePreviewUrl).catch(err => {
       console.error('Errore preview face detection:', err);
     });
@@ -1199,6 +1395,7 @@ function updatePendingImageUI() {
     pendingFaceAnalysisPromise = null;
     pendingFaceLowConfidenceBlocked = false;
     pendingFaceLowConfidenceAlertedAnalysisId = 0;
+    updatePendingImageRecognitionIndicator('');
     clearFacePreviewUI();
   }
 }
@@ -1214,7 +1411,8 @@ async function createSafeImagePreviewUrl(file) {
   try {
     const drawable = await loadDrawableImageFromFile(file);
     const longestSide = Math.max(drawable.width, drawable.height);
-    const scale = longestSide > 720 ? 720 / longestSide : 1;
+    const maxPreviewDimension = getFacePreviewMaxDimension();
+    const scale = longestSide > maxPreviewDimension ? maxPreviewDimension / longestSide : 1;
     const targetWidth = Math.max(1, Math.round(drawable.width * scale));
     const targetHeight = Math.max(1, Math.round(drawable.height * scale));
     const canvas = document.createElement('canvas');
@@ -1623,7 +1821,13 @@ function rememberDefaultUserNameFromMessage(role, content) {
   if (!name) return;
 
   try {
+    const existingName = String(localStorage.getItem(STORAGE_KEYS.defaultUserName) || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (existingName && existingName.toLowerCase() === name.toLowerCase()) return;
+
     localStorage.setItem(STORAGE_KEYS.defaultUserName, name);
+    console.warn('[PROFILE] nome utente default salvato:', name);
   } catch (err) {
     console.warn('Salvataggio nome utente default fallito:', err);
   }
@@ -1934,9 +2138,7 @@ export async function handleTextMessage() {
       }
 
       if (pendingFaceLowConfidenceBlocked || hasUncertainKnownFaces()) {
-        if (!pendingFaceLowConfidenceAlertedAnalysisId) {
-          window.alert('Foto non inviata: volto non confermato.');
-        }
+        updatePendingImageRecognitionIndicator('unrecognized');
         return;
       }
     }
@@ -2211,8 +2413,17 @@ export function bindEvents() {
 
   dom.userInput.addEventListener('pointerdown', e => {
     if (!isVirtualKeyboardAvailable()) return;
-    e.preventDefault();
     openVirtualKeyboard();
+  });
+
+  dom.userInput.addEventListener('click', () => {
+    if (!isVirtualKeyboardAvailable()) return;
+    syncVirtualKeyboardAutoShift();
+  });
+
+  dom.userInput.addEventListener('select', () => {
+    if (!isVirtualKeyboardAvailable()) return;
+    syncVirtualKeyboardAutoShift();
   });
 
   dom.composerCenter?.addEventListener('click', e => {
@@ -2223,7 +2434,6 @@ export function bindEvents() {
 
   dom.userInput.addEventListener('focus', () => {
     if (!isVirtualKeyboardAvailable()) return;
-    dom.userInput.blur();
     openVirtualKeyboard();
   });
 
@@ -2235,6 +2445,8 @@ export function bindEvents() {
     startVirtualKeyboardDrag(e);
     const button = e.target.closest('button');
     if (button) {
+      registerVirtualKeyboardTap(e);
+      pulseVirtualKeyboardButton(button);
       beginVirtualKeyboardAccent(button);
     }
   });
@@ -2256,6 +2468,7 @@ export function bindEvents() {
   dom.virtualKeyboard?.addEventListener('click', async e => {
     const button = e.target.closest('button');
     if (!button) return;
+    if (wasVirtualKeyboardTapDragged(e)) return;
 
     if (virtualKeyboardSuppressClick) {
       virtualKeyboardSuppressClick = false;

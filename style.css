@@ -927,10 +927,6 @@ body::before {
     0 12px 24px rgba(0, 0, 0, 0.20);
 }
 
-.text-input.uses-virtual-keyboard {
-  caret-color: transparent;
-}
-
 .text-input {
   width: 100%;
   min-height: 22px;
@@ -950,6 +946,13 @@ body::before {
   white-space: pre-wrap;
   overflow-wrap: break-word;
   -webkit-overflow-scrolling: touch;
+  caret-color: rgba(145, 231, 210, 0.95);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.text-input.uses-virtual-keyboard {
+  caret-color: rgba(145, 231, 210, 0.95);
 }
 
 .text-input::-webkit-scrollbar {
@@ -987,6 +990,8 @@ body::before {
   pointer-events: none;
   transition: transform 0.22s var(--motion-ease), opacity 0.18s ease;
   touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .virtual-keyboard.is-open {
@@ -1040,13 +1045,41 @@ body::before {
     inset 0 -1px 0 rgba(255, 255, 255, 0.035);
   touch-action: manipulation;
   backdrop-filter: blur(10px) saturate(1.16);
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 0.11s ease,
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
-.virtual-keyboard button:active {
+.virtual-keyboard button:not(.vk-return)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 50% 12%, rgba(255, 255, 255, 0.26), transparent 42%);
+  opacity: 0;
+  transform: translateY(8px) scale(0.86);
+  pointer-events: none;
+}
+
+.virtual-keyboard button:active,
+.virtual-keyboard button.is-pressed {
   transform: translateY(1px) scale(0.98);
   background:
     linear-gradient(180deg, rgba(145, 231, 210, 0.24), rgba(154, 174, 255, 0.12)),
     rgba(17, 30, 48, 0.60);
+  border-color: rgba(145, 231, 210, 0.34);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.18),
+    0 0 20px rgba(145, 231, 210, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.virtual-keyboard button:not(.vk-return).is-pressed::after {
+  animation: vkKeyBloom 0.18s ease-out;
 }
 
 .virtual-keyboard.has-shift [data-action="shift"],
@@ -1082,8 +1115,26 @@ body::before {
 }
 
 .vk-return {
-  flex: 1.25;
-  font-size: 20px !important;
+  flex: 1.35;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.vk-return-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.virtual-keyboard.vk-newline-pop .vk-return {
+  animation: vkReturnPop 0.18s ease-out;
 }
 
 .vk-symbol-toggle {
@@ -1122,8 +1173,34 @@ body::before {
   font-weight: 740;
 }
 
+@keyframes vkKeyBloom {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.84);
+  }
+  45% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px) scale(1.08);
+  }
+}
+
+@keyframes vkReturnPop {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  45% {
+    transform: translateY(-1px) scale(1.035);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
 .pending-image-chip {
-  max-width: 78px;
+  max-width: 98px;
   min-width: 0;
   align-items: center;
   background:
@@ -1146,6 +1223,35 @@ body::before {
 
 .pending-image-label {
   display: none;
+}
+
+.pending-image-recognition-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 0 12px rgba(255, 255, 255, 0.08);
+}
+
+.pending-image-recognition-dot[hidden] {
+  display: none;
+}
+
+.pending-image-recognition-dot.is-known {
+  background: #55e88f;
+  box-shadow:
+    0 0 0 1px rgba(127, 255, 178, 0.42),
+    0 0 12px rgba(85, 232, 143, 0.48);
+}
+
+.pending-image-recognition-dot.is-unrecognized {
+  background: #ff4b5f;
+  box-shadow:
+    0 0 0 1px rgba(255, 101, 121, 0.42),
+    0 0 12px rgba(255, 75, 95, 0.42);
 }
 
 .pending-image-remove {
@@ -1558,7 +1664,7 @@ body::before {
   }
 
   .pending-image-chip {
-    max-width: 70px;
+    max-width: 92px;
     padding: 4px;
     border-radius: 13px;
   }
@@ -1619,6 +1725,11 @@ body::before {
     height: 43px;
     border-radius: 14px;
     font-size: 16px;
+  }
+
+  .vk-return-icon {
+    width: 17px;
+    height: 17px;
   }
 
   .vk-space span {

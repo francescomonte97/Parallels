@@ -12,6 +12,14 @@ import { LIPU_USER_PROFILES } from './profiles.js';
 const KNOWN_FACES_JSON_PATH = './js/known-faces.json';
 const KNOWN_FACES_OVERRIDE_KEY = 'lipu_known_faces_override';
 const KNOWN_FACES_DIRTY_KEY = 'lipu_known_faces_dirty';
+const KNOWN_FACE_MIN_SCORE = 0.94;
+const UNCERTAIN_FACE_MIN_SCORE = 0.88;
+const MOBILE_FACE_DETECTOR_INPUT_SIZE = 512;
+const DESKTOP_FACE_DETECTOR_INPUT_SIZE = 512;
+const MOBILE_FACE_EMBEDDING_INPUT_SIZE = 512;
+const DESKTOP_FACE_EMBEDDING_INPUT_SIZE = 512;
+const MOBILE_FACE_SCORE_THRESHOLD = 0.25;
+const DESKTOP_FACE_SCORE_THRESHOLD = 0.25;
 
 let knownFacesCache = null;
 let faceApiModelsReadyPromise = null;
@@ -90,6 +98,22 @@ const PARTICLE_THEME_PRESETS = [
     audio: [255, 236, 160]
   }
 ];
+
+function isMobileViewport() {
+  return window.matchMedia?.('(max-width: 768px), (pointer: coarse)')?.matches || false;
+}
+
+function getFaceDetectorInputSize() {
+  return isMobileViewport() ? MOBILE_FACE_DETECTOR_INPUT_SIZE : DESKTOP_FACE_DETECTOR_INPUT_SIZE;
+}
+
+function getFaceEmbeddingInputSize() {
+  return isMobileViewport() ? MOBILE_FACE_EMBEDDING_INPUT_SIZE : DESKTOP_FACE_EMBEDDING_INPUT_SIZE;
+}
+
+function getFaceDetectorScoreThreshold() {
+  return isMobileViewport() ? MOBILE_FACE_SCORE_THRESHOLD : DESKTOP_FACE_SCORE_THRESHOLD;
+}
 
 export function syncUserProfileInputs() {
   dom.userProfileInputs.forEach(input => {
@@ -888,6 +912,30 @@ function normalizeEmbeddingVector(values = []) {
   return vector.map(value => Number((value / norm).toFixed(8)));
 }
 
+function normalizeKnownFaceThresholds(thresholds = {}) {
+  const known = Math.max(
+    KNOWN_FACE_MIN_SCORE,
+    Number(thresholds?.known) || KNOWN_FACE_MIN_SCORE
+  );
+  const uncertain = Math.min(
+    known,
+    Math.max(
+      UNCERTAIN_FACE_MIN_SCORE,
+      Number(thresholds?.uncertain) || UNCERTAIN_FACE_MIN_SCORE
+    )
+  );
+
+  return {
+    known,
+    uncertain,
+    minMarginKnown: Number(thresholds?.minMarginKnown) || 0.03,
+    minMarginUncertain: Number(thresholds?.minMarginUncertain) || 0.015,
+    minEnrollmentPhotos: Number(thresholds?.minEnrollmentPhotos) || 5,
+    minEnrollmentSimilarity: Number(thresholds?.minEnrollmentSimilarity) || 0.45,
+    minEnrollmentPairSimilarity: Number(thresholds?.minEnrollmentPairSimilarity) || 0.3
+  };
+}
+
 function ensureKnownFacesShape(data) {
   if (!data || typeof data !== 'object') {
     return {
@@ -895,15 +943,7 @@ function ensureKnownFacesShape(data) {
       engine: 'face-api.js',
       descriptorLength: 128,
       metric: 'cosine',
-      thresholds: {
-        known: 0.42,
-        uncertain: 0.32,
-        minMarginKnown: 0.03,
-        minMarginUncertain: 0.015,
-        minEnrollmentPhotos: 5,
-        minEnrollmentSimilarity: 0.45,
-        minEnrollmentPairSimilarity: 0.3
-      },
+      thresholds: normalizeKnownFaceThresholds(),
       people: []
     };
   }
@@ -913,15 +953,7 @@ function ensureKnownFacesShape(data) {
     engine: String(data.engine || 'face-api.js'),
     descriptorLength: Number(data.descriptorLength) || 128,
     metric: String(data.metric || 'cosine'),
-    thresholds: {
-      known: Number(data?.thresholds?.known) || 0.42,
-      uncertain: Number(data?.thresholds?.uncertain) || 0.32,
-      minMarginKnown: Number(data?.thresholds?.minMarginKnown) || 0.03,
-      minMarginUncertain: Number(data?.thresholds?.minMarginUncertain) || 0.015,
-      minEnrollmentPhotos: Number(data?.thresholds?.minEnrollmentPhotos) || 5,
-      minEnrollmentSimilarity: Number(data?.thresholds?.minEnrollmentSimilarity) || 0.45,
-      minEnrollmentPairSimilarity: Number(data?.thresholds?.minEnrollmentPairSimilarity) || 0.3
-    },
+    thresholds: normalizeKnownFaceThresholds(data?.thresholds),
     people: Array.isArray(data.people)
       ? data.people.map(person => ({
           id: String(person?.id || '').trim(),
@@ -1058,8 +1090,8 @@ async function generateEmbeddingFromCanvas(faceCanvas) {
     .detectSingleFace(
       faceCanvas,
       new faceapi.TinyFaceDetectorOptions({
-        inputSize: 512,
-        scoreThreshold: 0.25
+        inputSize: getFaceEmbeddingInputSize(),
+        scoreThreshold: getFaceDetectorScoreThreshold()
       })
     )
     .withFaceLandmarks(true)
@@ -1188,8 +1220,8 @@ async function generateFaceEmbeddingsForSelectedPerson(files = [], options = {})
       .detectAllFaces(
         imageElement,
         new faceapi.TinyFaceDetectorOptions({
-          inputSize: 512,
-          scoreThreshold: 0.25
+          inputSize: getFaceDetectorInputSize(),
+          scoreThreshold: getFaceDetectorScoreThreshold()
         })
       )
       .withFaceLandmarks(true)

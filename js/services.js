@@ -896,7 +896,16 @@ function getPersistentIdentityContext() {
   const storedName = getStoredDefaultUserName();
   if (!storedName) return '';
 
-  return `Identità persistente: l'utente del profilo default è ${storedName}. Non sostituirlo con altri profili e non perdere questo nome nei turni successivi.`;
+  return `Identità persistente prioritaria: l'utente attivo del profilo "-" si chiama ${storedName}. Questo è il nome stabile dell'utente corrente. Non perderlo, non sostituirlo con altri profili e non trattarlo come informazione incerta.`;
+}
+
+function buildModelUserMessage(userMsg = '') {
+  const cleanUserMsg = normalizeString(userMsg);
+  const identityContext = getPersistentIdentityContext();
+
+  if (!identityContext) return cleanUserMsg;
+
+  return `${identityContext}\n\nMessaggio effettivo dell'utente:\n${cleanUserMsg}`;
 }
 
 function buildRetrievalSeed(
@@ -1206,6 +1215,9 @@ function buildSystemText(
   return `
 Sei Alessandro Lipuma.
 
+Identità persistente prioritaria:
+${getPersistentIdentityContext() || 'Nessuna identità persistente salvata per il profilo default.'}
+
 Identità utente:
 ${userProfileContext || 'Nessun profilo utente attivo.'}
 
@@ -1309,7 +1321,7 @@ export async function getLIPUResponse(userMsg) {
     const aiRelState = await analyzeUserRelationalState(userMsg);
     const relationshipState = updateRelationshipStateWithAI(aiRelState);
     const relationshipInstructions = getRelationshipInstructions(relationshipState);
-    const userProfileContext = clampText(getActiveUserProfileContext(), 420);
+    const userProfileContext = clampText(getActiveUserProfileContext(), 900);
     const recentConversationContext = getRecentConversationContext(6, true);
     const sessionSummaryContext = getSessionSummaryContext();
     const pinnedSummaryContext = getPinnedSummaryContext();
@@ -1344,7 +1356,7 @@ export async function getLIPUResponse(userMsg) {
     const selectedMainModel = resolveMainResponseModel(userMsg);
 
     const data = await postJSON(`${WORKER_BASE_URL}/api/claude`, {
-      userMsg: normalizeString(userMsg),
+      userMsg: buildModelUserMessage(userMsg),
       systemText,
       model: selectedMainModel.model,
       temperature: selectedMainModel.temperature,
@@ -1442,6 +1454,7 @@ export async function analyzeImageWithAI(imageBlob, people = [], userText = '') 
     const otherPeople = identifiedPeople.filter(person => !isLipuSelfReference(person));
     const hasSelf = selfPeople.length > 0;
     const localAwarenessContext = getLocalAwarenessContext(userText || 'Immagine inviata');
+    const persistentIdentityContext = getPersistentIdentityContext();
 
     // 🔥 costruzione contesto persone (gestione singolo vs multiplo)
     let peopleText = '';
@@ -1484,6 +1497,7 @@ export async function analyzeImageWithAI(imageBlob, people = [], userText = '') 
 
     const prompt = `
 ${peopleText || 'Nessuna persona identificata con alta affidabilità.'}
+${persistentIdentityContext ? `\n${persistentIdentityContext}` : ''}
 ${userText ? `Messaggio utente: ${userText}` : ''}
 ${localAwarenessContext ? `\nContesto locale:\n${localAwarenessContext}` : ''}
 

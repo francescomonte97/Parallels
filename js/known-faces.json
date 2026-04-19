@@ -4,7 +4,7 @@
   "descriptorLength": 128,
   "metric": "cosine",
   "thresholds": {
-    "known": 0.92,
+    "known": 0.94,
     "uncertain": 0.88,
     "minMarginKnown": 0.03,
     "minMarginUncertain": 0.015,
