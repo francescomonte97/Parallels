@@ -133,10 +133,24 @@ function stopAllOtherPlayers(currentAudio, currentPlayer) {
   });
 }
 
-async function shareAudioFile(audioSource) {
+async function shareAudioFile(audioElement) {
   try {
-    const response = await fetch(audioSource);
-    const blob = await response.blob();
+    const audio = audioElement instanceof HTMLAudioElement ? audioElement : null;
+    if (!audio || !audio.src) {
+      console.error('Elemento audio non valido');
+      return;
+    }
+
+    let blob;
+    if (audio.src.startsWith('blob:')) {
+      blob = await fetch(audio.src).then(r => r.blob()).catch(() => null);
+      if (!blob) {
+        console.error('Impossibile convertire blob URL');
+        return;
+      }
+    } else {
+      blob = await fetch(audio.src).then(r => r.blob());
+    }
 
     const extension = blob.type.includes('mpeg')
       ? 'mp3'
@@ -263,7 +277,7 @@ function createCustomAudioPlayer(audioSource) {
   });
 
   shareBtn.addEventListener('click', async () => {
-    await shareAudioFile(audioSource);
+    await shareAudioFile(audio);
   });
 
   audio.addEventListener('play', () => setPlayingUI(true));
