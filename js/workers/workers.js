@@ -138,6 +138,28 @@ function normalizeMaxTokens(value, fallback = 400) {
   return Math.max(1, Math.min(4000, Math.floor(num)));
 }
 
+function normalizeAudioMimeType(value = '') {
+  const mimeType = String(value || '')
+    .toLowerCase()
+    .split(';')[0]
+    .trim();
+
+  if (mimeType === 'audio/mp3') return 'audio/mpeg';
+  if (mimeType === 'audio/x-wav') return 'audio/wav';
+
+  return [
+    'audio/webm',
+    'audio/ogg',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/wav',
+    'audio/aac',
+    'audio/flac'
+  ].includes(mimeType)
+    ? mimeType
+    : 'audio/webm';
+}
+
 async function handleClaude(request, env) {
   const body = await request.json();
   const userMsg = String(body?.userMsg || '').trim();
@@ -201,7 +223,6 @@ async function handleClaude(request, env) {
   const raw = await upstream.text();
 
   if (!upstream.ok) {
-    // 🔥 Fallback Gemini Vision (solo se c'è immagine e API disponibile)
     if (hasImage && env.GEMINI_API_KEY) {
       try {
         const geminiResp = await fetch(
@@ -281,7 +302,7 @@ async function handleClaude(request, env) {
 async function handleGeminiSTT(request, env) {
   const body = await request.json();
   const base64Audio = String(body?.base64Audio || '');
-  const mimeType = String(body?.mimeType || 'audio/webm');
+  const mimeType = normalizeAudioMimeType(body?.mimeType || 'audio/webm');
 
   if (!env.GEMINI_API_KEY) {
     return json({ error: 'GEMINI_API_KEY mancante' }, 500);
@@ -323,7 +344,8 @@ async function handleGeminiSTT(request, env) {
   if (!upstream.ok) {
     return json(
       {
-        error: raw || 'Errore STT Gemini'
+        error: raw || 'Errore STT Gemini',
+        mimeType
       },
       upstream.status
     );
@@ -337,7 +359,8 @@ async function handleGeminiSTT(request, env) {
   }
 
   return json({
-    text: extractGeminiText(data)
+    text: extractGeminiText(data),
+    mimeType
   });
 }
 
@@ -366,7 +389,7 @@ async function handleGeminiOCR(request, env) {
           {
             parts: [
               {
-                text: 'Estrai tutto il testo presente nell'immagine. Restituisci solo il testo, mantenendo l'ordine di lettura. Se non c'è testo, restituisci stringa vuota.'
+                text: 'Estrai tutto il testo presente nell\'immagine. Restituisci solo il testo, mantenendo l\'ordine di lettura. Se non c\'è testo, restituisci stringa vuota.'
               },
               {
                 inlineData: {
@@ -501,9 +524,13 @@ async function handleElevenLabsTTS(request, env) {
     return json({ error: 'text mancante' }, 400);
   }
 
-  const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+  const elevenLabsUrl = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`);
+  elevenLabsUrl.searchParams.set('output_format', 'mp3_44100_128');
+
+  const upstream = await fetch(elevenLabsUrl.toString(), {
     method: 'POST',
     headers: {
+      'Accept': 'audio/mpeg',
       'Content-Type': 'application/json',
       'xi-api-key': env.ELEVENLABS_API_KEY
     },
@@ -529,16 +556,15 @@ async function handleElevenLabsTTS(request, env) {
     );
   }
 
-  const contentType = upstream.headers.get('content-type');
-  const mimeType = contentType && (contentType.includes('mpeg') || contentType.includes('mp3'))
-    ? 'audio/mpeg'
-    : contentType || 'audio/mpeg';
+  if (!arrayBuffer.byteLength) {
+    return json({ error: 'Audio ElevenLabs vuoto' }, 502);
+  }
 
   return new Response(arrayBuffer, {
     status: 200,
     headers: {
-      'Content-Type': mimeType,
-      'Content-Length': arrayBuffer.byteLength,
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': String(arrayBuffer.byteLength),
       'Cache-Control': 'no-cache',
       ...corsHeaders()
     }
