@@ -366,7 +366,7 @@ async function handleGeminiOCR(request, env) {
           {
             parts: [
               {
-                text: 'Estrai tutto il testo presente nell’immagine. Restituisci solo il testo, mantenendo l’ordine di lettura. Se non c’è testo, restituisci stringa vuota.'
+                text: 'Estrai tutto il testo presente nell'immagine. Restituisci solo il testo, mantenendo l'ordine di lettura. Se non c'è testo, restituisci stringa vuota.'
               },
               {
                 inlineData: {
@@ -529,10 +529,17 @@ async function handleElevenLabsTTS(request, env) {
     );
   }
 
+  const contentType = upstream.headers.get('content-type');
+  const mimeType = contentType && (contentType.includes('mpeg') || contentType.includes('mp3'))
+    ? 'audio/mpeg'
+    : contentType || 'audio/mpeg';
+
   return new Response(arrayBuffer, {
     status: 200,
     headers: {
-      'Content-Type': upstream.headers.get('content-type') || 'audio/mpeg',
+      'Content-Type': mimeType,
+      'Content-Length': arrayBuffer.byteLength,
+      'Cache-Control': 'no-cache',
       ...corsHeaders()
     }
   });
