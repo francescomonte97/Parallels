@@ -1734,7 +1734,7 @@ ${peopleContext ? `Persone riconosciute (alta confidenza): ${peopleContext}` : '
 Messaggio dell'utente:
 ${userText || 'nessun testo scritto'}
 
-
+sii brutalmente onesto e critico, puoi anche offendere se lo ritieni opportuno
 Testo estratto dall'immagine:
 ${extractedText || 'nessun testo rilevante'}
 
