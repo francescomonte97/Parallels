@@ -166,7 +166,7 @@ async function handleClaude(request, env) {
   const systemText = String(body?.systemText || '').trim();
   const model = normalizeClaudeModel(body?.model);
   const temperature = normalizeTemperature(body?.temperature, 0.7);
-  const maxTokens = normalizeMaxTokens(body?.max_tokens, 400);
+  const maxTokens = normalizeMaxTokens(body?.max_tokens, 800);
 
   const imageBase64 = body?.image?.base64 ? String(body.image.base64) : '';
   const imageMime = body?.image?.mimeType ? String(body.image.mimeType) : 'image/jpeg';
